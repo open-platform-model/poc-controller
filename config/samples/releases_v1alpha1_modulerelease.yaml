@@ -1,0 +1,9 @@
+apiVersion: releases.opmodel.dev/v1alpha1
+kind: ModuleRelease
+metadata:
+  labels:
+    app.kubernetes.io/name: poc-controller
+    app.kubernetes.io/managed-by: kustomize
+  name: modulerelease-sample
+spec:
+  # TODO(user): Add fields here

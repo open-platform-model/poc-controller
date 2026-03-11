@@ -1,0 +1,91 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task: help
+
+  help:
+    desc: Show available tasks
+    cmds:
+      - make help
+
+  manifests:
+    desc: Generate CRDs and RBAC manifests
+    cmds:
+      - make manifests
+
+  generate:
+    desc: Generate deepcopy code
+    cmds:
+      - make generate
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - make fmt
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - make vet
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - make lint
+
+  lint-fix:
+    desc: Run golangci-lint with fixes
+    cmds:
+      - make lint-fix
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - make test
+
+  build:
+    desc: Build the manager binary
+    cmds:
+      - make build
+
+  run:
+    desc: Run the controller locally
+    cmds:
+      - make run
+
+  install:
+    desc: Install CRDs
+    cmds:
+      - make install
+
+  uninstall:
+    desc: Uninstall CRDs
+    cmds:
+      - make uninstall
+
+  deploy:
+    desc: Deploy the controller manager
+    cmds:
+      - make deploy
+
+  undeploy:
+    desc: Remove the controller manager
+    cmds:
+      - make undeploy
+
+  docker-build:
+    desc: Build the manager image
+    cmds:
+      - make docker-build
+
+  docker-push:
+    desc: Push the manager image
+    cmds:
+      - make docker-push
+
+  build-installer:
+    desc: Build consolidated install manifest
+    cmds:
+      - make build-installer

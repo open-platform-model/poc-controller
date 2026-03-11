@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- releases_v1alpha1_modulerelease.yaml
+- releases_v1alpha1_bundlerelease.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

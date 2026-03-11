@@ -1,0 +1,49 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - releases.opmodel.dev
+  resources:
+  - bundlereleases
+  - modulereleases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - releases.opmodel.dev
+  resources:
+  - bundlereleases/finalizers
+  - modulereleases/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - releases.opmodel.dev
+  resources:
+  - bundlereleases/status
+  - modulereleases/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - source.toolkit.fluxcd.io
+  resources:
+  - ocirepositories
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - source.toolkit.fluxcd.io
+  resources:
+  - ocirepositories/status
+  verbs:
+  - get
