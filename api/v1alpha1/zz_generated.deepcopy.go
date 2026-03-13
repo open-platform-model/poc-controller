@@ -21,7 +21,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"github.com/fluxcd/pkg/apis/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -93,11 +92,6 @@ func (in *BundleReleaseSpec) DeepCopyInto(out *BundleReleaseSpec) {
 		in, out := &in.Values, &out.Values
 		*out = new(RawValues)
 		(*in).DeepCopyInto(*out)
-	}
-	if in.DependsOn != nil {
-		in, out := &in.DependsOn, &out.DependsOn
-		*out = make([]meta.NamespacedObjectReference, len(*in))
-		copy(*out, *in)
 	}
 }
 
@@ -324,11 +318,6 @@ func (in *ModuleReleaseSpec) DeepCopyInto(out *ModuleReleaseSpec) {
 		in, out := &in.Rollout, &out.Rollout
 		*out = new(RolloutSpec)
 		**out = **in
-	}
-	if in.DependsOn != nil {
-		in, out := &in.DependsOn, &out.DependsOn
-		*out = make([]meta.NamespacedObjectReference, len(*in))
-		copy(*out, *in)
 	}
 }
 

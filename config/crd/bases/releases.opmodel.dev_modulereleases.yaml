@@ -48,23 +48,6 @@ spec:
           spec:
             description: spec defines the desired state of ModuleRelease
             properties:
-              dependsOn:
-                items:
-                  description: |-
-                    NamespacedObjectReference contains enough information to locate the referenced Kubernetes resource object in any
-                    namespace.
-                  properties:
-                    name:
-                      description: Name of the referent.
-                      type: string
-                    namespace:
-                      description: Namespace of the referent, when not specified it
-                        acts as LocalObjectReference.
-                      type: string
-                  required:
-                  - name
-                  type: object
-                type: array
               module:
                 description: Module selects the module to evaluate from the source
                   artifact.

@@ -17,7 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -47,9 +46,6 @@ type ModuleReleaseSpec struct {
 
 	// +optional
 	Rollout *RolloutSpec `json:"rollout,omitempty"`
-
-	// +optional
-	DependsOn []fluxmeta.NamespacedObjectReference `json:"dependsOn,omitempty"`
 }
 
 // ModuleReleaseStatus defines the observed state of ModuleRelease.

@@ -17,7 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -39,9 +38,6 @@ type BundleReleaseSpec struct {
 
 	// +optional
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
-
-	// +optional
-	DependsOn []fluxmeta.NamespacedObjectReference `json:"dependsOn,omitempty"`
 }
 
 // BundleReleaseStatus defines the observed state of BundleRelease.
