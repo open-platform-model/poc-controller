@@ -1,170 +1,164 @@
-# poc-controller Agent Guide
+# AGENTS.md - poc-controller repository guide
 
 ## Purpose
 
 - This repository is a Kubebuilder-based Kubernetes controller written in Go.
 - It defines and reconciles `ModuleRelease` and `BundleRelease` CRDs in `api/v1alpha1`.
-- Agents should preserve Kubebuilder conventions, controller-runtime patterns, and generated-file boundaries.
+- Agents should preserve controller-runtime patterns, Kubebuilder markers, and generated-file boundaries.
+
+## Repository Rules
+
+- Repo-specific agent guidance lives in this `AGENTS.md` and `CONSTITUTION.md`.
+
+## Entrypoint
+
+- Agents entering this repository should read these documents first, in order.
+- `AGENTS.md`: repository-specific commands, workflows, style, and verification expectations.
+- `CONSTITUTION.md`: root-level engineering principles and change-shaping rules.
+- `openspec/config.yaml`: normative OpenSpec constitutional source for this repository.
+- `Makefile`: authoritative build, generate, lint, and test entrypoints.
+- `docs/STYLE.md`: documentation prose style rules for this repo.
 
 ## Repository Layout
 
-- `cmd/main.go`: controller manager entrypoint and controller registration.
-- `api/v1alpha1/*.go`: API schemas and shared CRD types.
-- `api/v1alpha1/zz_generated.deepcopy.go`: generated DeepCopy code; do not edit.
-- `internal/controller/*.go`: reconcilers and envtest-based controller tests.
-- `internal/{apply,inventory,reconcile,render,source,status}`: internal domain packages.
-- `config/crd/bases/*.yaml`: generated CRDs; do not edit by hand.
-- `config/rbac/role.yaml`: generated RBAC; do not edit by hand.
-- `config/samples/*.yaml`: sample CRs; safe to update when behavior changes.
+- `cmd/main.go`: manager entrypoint and controller registration.
+- `api/v1alpha1/*.go`: API schemas, validation markers, and shared CRD types.
+- `api/v1alpha1/zz_generated.deepcopy.go`: generated DeepCopy code; do not edit by hand.
+- `internal/controller/*.go`: reconcilers and envtest-backed controller tests.
+- `internal/{apply,inventory,reconcile,render,source,status}`: domain packages used by controllers.
+- `config/crd/bases/*.yaml`: generated CRDs; regenerate instead of hand-editing.
+- `config/rbac/role.yaml`: generated RBAC; regenerate instead of hand-editing.
+- `config/samples/*.yaml`: sample manifests; update when behavior or schema changes.
 - `test/e2e/*.go`: Kind-backed end-to-end tests guarded by the `e2e` build tag.
-- `Makefile`: canonical build, generation, lint, test, and deploy entrypoints.
-- `Taskfile.yml`: thin wrappers around `make` targets.
-
-## Rules Files
-
-- Checked for Cursor rules in `.cursor/rules/` and `.cursorrules`: none found.
-- Checked for Copilot instructions in `.github/copilot-instructions.md`: none found.
-- The only repo-specific agent instructions live in this `AGENTS.md`.
+- `Makefile`: source of truth for generation, build, lint, test, and deploy workflows.
+- `Taskfile.yml`: convenience wrappers that delegate directly to `make` targets.
 
 ## Generated Files And Scaffold Boundaries
 
 - Never hand-edit `api/v1alpha1/zz_generated.deepcopy.go`.
-- Never hand-edit `config/crd/bases/*.yaml`.
-- Never hand-edit `config/rbac/role.yaml`.
+- Never hand-edit `config/crd/bases/*.yaml` or `config/rbac/role.yaml`.
 - Never hand-edit `PROJECT`.
-- Preserve `// +kubebuilder:scaffold:*` comments.
-- If you change API markers or `*_types.go`, regenerate outputs instead of editing generated artifacts.
+- Preserve `// +kubebuilder:scaffold:*` comments and license headers in scaffolded files.
+- If you change API markers, schema fields, or `*_types.go`, run `make manifests generate`.
 
-## Build, Generate, Lint, And Test Commands
+## Build And Dev Commands
 
-- `make help`: list supported targets.
+### Core Commands
+
+- `make help`: list available targets.
 - `make manifests`: regenerate CRDs, RBAC, and webhook manifests with `controller-gen`.
 - `make generate`: regenerate DeepCopy methods.
 - `make fmt`: run `go fmt ./...`.
 - `make vet`: run `go vet ./...`.
-- `make lint-config`: validate the golangci-lint configuration.
+- `make lint-config`: verify the golangci-lint configuration.
 - `make lint`: run golangci-lint.
 - `make lint-fix`: run golangci-lint with auto-fixes.
-- `make build`: run generation + formatting + vet, then build `bin/manager`.
+- `make build`: run generation, formatting, vet, then build `bin/manager`.
 - `make run`: run the controller locally against the current kubeconfig.
 - `make test`: run non-e2e tests with envtest and write `cover.out`.
-- `make test-e2e`: create/use a Kind cluster, run e2e tests, then tear the cluster down.
-- `make docker-build IMG=<image>`: build the controller image.
-- `make deploy IMG=<image>`: deploy the controller to the current cluster.
+- `make setup-test-e2e`: create the Kind cluster if it does not exist.
+- `make test-e2e`: run e2e tests against Kind, then clean the cluster up.
+- `make build-installer`: render `dist/install.yaml` from `config/default`.
+- `make docker-build IMG=<image>` and `make docker-push IMG=<image>`: build or publish images.
+- `make deploy IMG=<image>` / `make undeploy`: install or remove the controller from a cluster.
 
-## Single Test Commands
+### Single Test Commands
 
-- Controller/unit tests use Go test plus Ginkgo v2; there is no dedicated `make test-one` target.
-- Preferred package-level run: `go test ./internal/controller`.
-- Run one Go test function: `go test ./internal/controller -run TestControllers`.
-- Run one Ginkgo spec in controller tests:
-  `KUBEBUILDER_ASSETS="$(./bin/setup-envtest use 1.35.0 --bin-dir ./bin -p path)" go test ./internal/controller -run TestControllers -ginkgo.focus="BundleRelease Controller"`
-- Narrow further to one spec text:
-  `KUBEBUILDER_ASSETS="$(./bin/setup-envtest use 1.35.0 --bin-dir ./bin -p path)" go test ./internal/controller -run TestControllers -ginkgo.focus="should successfully reconcile the resource"`
-- If `./bin/setup-envtest` is missing or outdated, run `make setup-envtest` first.
+- There is no dedicated `make test-one` target; use `go test` directly.
+- Package-level controller tests: `go test ./internal/controller`.
+- Single Go test entrypoint: `go test ./internal/controller -run TestControllers`.
+- Before focused envtest runs, ensure binaries exist with `make setup-envtest`.
+- Reuse envtest binaries explicitly when running controller specs:
+  `KUBEBUILDER_ASSETS="$(./bin/setup-envtest use 1.35.0 --bin-dir ./bin -p path)" go test ./internal/controller -run TestControllers`.
+- Focus one Ginkgo suite or spec:
+  `KUBEBUILDER_ASSETS="$(./bin/setup-envtest use 1.35.0 --bin-dir ./bin -p path)" go test ./internal/controller -run TestControllers -ginkgo.focus="BundleRelease Controller"`.
+- Focus one spec text more narrowly:
+  `KUBEBUILDER_ASSETS="$(./bin/setup-envtest use 1.35.0 --bin-dir ./bin -p path)" go test ./internal/controller -run TestControllers -ginkgo.focus="should successfully reconcile the resource"`.
 - E2E package only: `go test -tags=e2e ./test/e2e -v -ginkgo.v`.
 - Single e2e spec:
-  `KIND_CLUSTER=poc-controller-test-e2e go test -tags=e2e ./test/e2e -run TestE2E -ginkgo.focus="should run successfully" -v -ginkgo.v`
-- `make test` excludes `/test/e2e`; keep that behavior unless you explicitly want Kind-based coverage.
+  `KIND_CLUSTER=poc-controller-test-e2e go test -tags=e2e ./test/e2e -run TestE2E -ginkgo.focus="should run successfully" -v -ginkgo.v`.
+- `make test` intentionally excludes `/test/e2e`; do not fold Kind-based tests into the default unit path.
 
-## Typical Agent Workflow
+## Working Style for Agents
 
-- For changes under `api/v1alpha1`, run `make manifests generate` after editing.
-- For changes under `internal/` or `cmd/`, run `make fmt vet test` at minimum.
-- For broader changes, prefer `make lint-fix` before final verification.
-- If deployment manifests or RBAC behavior changed, consider `make build-installer` after regeneration.
-- Use `task <name>` only as a convenience alias; `make` is the source of truth.
+- For edits under `api/v1alpha1`, run `make manifests generate` after changing schema or markers.
+- For Go changes under `cmd/` or `internal/`, run `make fmt vet test` at minimum.
+- For non-trivial changes, prefer `make lint` or `make lint-fix` before finishing.
+- If manifests or RBAC behavior changed, consider `make build-installer` so generated deploy output stays aligned.
+- Use `task <name>` only as a shorthand; `make` remains the authoritative interface.
 
 ## Go Version And Tooling
 
 - The module targets Go `1.25.3`.
-- CI uses `actions/setup-go` with `go.mod` as the version source.
-- Linting is driven by `golangci-lint` v2 with `gofmt` and `goimports` formatters enabled.
-- A custom `logcheck` plugin is loaded from `.custom-gcl.yml` to enforce Kubernetes logging conventions.
+- Primary frameworks are controller-runtime, Kubebuilder-generated APIs, Flux source types, Ginkgo v2, and Gomega.
+- Linting is driven by `golangci-lint` v2 with `gofmt` and `goimports` enabled as formatters.
+- A custom `logcheck` plugin is built from `.custom-gcl.yml` and enforces Kubernetes logging conventions.
+- Envtest and related binaries are installed into `./bin` through the Makefile targets.
 
 ## Formatting And Imports
 
-- Let `gofmt` and `goimports` own formatting and import grouping.
-- Use tabs and standard Go formatting; do not align fields manually.
-- Keep imports grouped as: standard library, external dependencies, then local module imports.
-- Use import aliases only when they clarify intent or avoid collisions.
-- Common aliases already in use include `ctrl`, `logf`, `metav1`, `fluxmeta`, and versioned API aliases.
-- Preserve blank lines between logical import groups.
+- Let `gofmt` and `goimports` own layout, spacing, and import grouping.
+- Use standard Go formatting with tabs; do not vertically align fields or assignments manually.
+- Keep imports grouped as: standard library, third-party dependencies, then local module imports.
+- Preserve blank lines between import groups.
+- Use aliases only when they improve clarity or match existing conventions, such as `ctrl`, `logf`, `metav1`, or versioned API aliases.
+- Avoid unused helpers and speculative abstractions; keep files idiomatic and compact.
 
-## Naming Conventions
+## Naming And API Design
 
-- Exported Go types use `PascalCase`; unexported helpers use `camelCase`.
-- Receiver names are short and conventional; reconcilers use `r`.
-- Kubernetes API structs use canonical names like `Spec`, `Status`, `Conditions`, `ObservedGeneration`.
-- Acronyms generally follow Go conventions already present in the repo, such as `URL`, `RBAC`, `CRD`, `OCI`.
-- JSON field names are lower camel case and explicit on all serialized fields.
-- Keep package names short, lowercase, and singular when practical.
-
-## Types And API Design
-
-- Prefer concrete structs over `map[string]any` in API and controller code.
-- For CRD status conditions, use `[]metav1.Condition` rather than custom condition structs.
-- For timestamps and durations, use Kubernetes types like `metav1.Time` and `metav1.Duration`.
-- Reuse Flux and Kubernetes reference types where the repo already does so.
-- Keep API comments compatible with Kubebuilder markers and CRD generation.
-- Add or update validation markers when introducing schema constraints.
-- Maintain `omitempty` and `omitzero` tags consistently with existing types.
+- Exported identifiers use `PascalCase`; unexported helpers use `camelCase`.
+- Keep receiver names short and conventional; reconcilers use `r`.
+- Package names should be lowercase and concise.
+- Follow Kubernetes naming patterns like `Spec`, `Status`, `Conditions`, and `ObservedGeneration`.
+- JSON field names should be explicit lowerCamelCase.
+- Prefer concrete structs over `map[string]any`, especially in APIs and reconciliation flow.
+- Reuse Kubernetes and Flux reference types where the repo already does so.
+- Use `[]metav1.Condition` for status conditions rather than introducing custom condition structs.
+- For API timestamps and durations, prefer Kubernetes types such as `metav1.Time` and `metav1.Duration`.
+- Maintain `omitempty` and `omitzero` tags consistently with the existing API style.
 
 ## Controller And Reconcile Style
 
-- Keep reconciliation idempotent.
-- Prefer controller-runtime patterns over ad hoc client logic.
-- Fetch from the API server before mutating objects that may have changed.
-- Use `.For(...)`, `.Owns(...)`, and related builder methods to declare watches.
-- Keep `Reconcile` readable; push domain logic into `internal/*` packages as complexity grows.
-- Return explicit `ctrl.Result{}` values rather than relying on zero-value ambiguity in complex branches.
-- Keep RBAC markers on reconcilers accurate whenever API usage changes.
+- Keep reconciliation idempotent and safe to retry.
+- Prefer controller-runtime helpers and patterns over ad hoc Kubernetes client logic.
+- Fetch fresh objects before mutating state that may have changed concurrently.
+- Declare watches with builder methods like `.For(...)` and `.Owns(...)`.
+- Keep `Reconcile` readable; move complex domain logic into `internal/*` packages.
+- Return explicit `ctrl.Result{}` values in non-trivial branches.
+- Keep RBAC markers accurate whenever a reconciler starts reading or writing new resources.
 
-## Error Handling
+## Error Handling And Logging
 
-- Return errors with context using `%w` when wrapping: `fmt.Errorf("failed to ...: %w", err)`.
-- Use package-level sentinel errors only when callers need to branch on them.
-- Do not swallow errors silently; either return them or log with clear context.
+- Wrap returned errors with context using `%w`, for example `fmt.Errorf("failed to render bundle: %w", err)`.
 - Keep error messages lowercase unless they start with a proper noun or identifier.
-- In tests, prefer `Expect(err).NotTo(HaveOccurred())` or `Expect(...).To(Succeed())`.
-- In cleanup paths, it is acceptable to ignore best-effort errors intentionally, but do so explicitly.
+- Do not silently swallow errors; either return them or log intentional best-effort failures clearly.
+- Use sentinel errors only when callers need to branch on them.
+- Use structured controller-runtime logging with balanced key/value pairs.
+- Follow Kubernetes log style: capitalized message, no trailing period, meaningful action wording.
+- Include identifying keys such as object name and namespace when logging reconciliation events.
 
-## Logging Conventions
+## Testing Style
 
-- Use structured logging via controller-runtime loggers.
-- Follow Kubernetes log style: capitalize the message, no trailing period, use active/past-tense wording.
-- Include balanced key/value pairs such as object name and namespace.
-- Prefer messages like `"Failed to create controller"` over generic text.
-- Keep high-volume logs out of hot paths unless they materially aid debugging.
-
-## Testing Conventions
-
-- Unit and controller tests use Ginkgo v2 and Gomega.
-- Envtest-backed tests live in `internal/controller` and bootstrap CRDs from `config/crd/bases`.
+- Tests use Ginkgo v2 and Gomega.
+- Envtest-backed controller tests live in `internal/controller` and load CRDs from `config/crd/bases`.
 - E2E tests require Kind and may install CertManager unless `CERT_MANAGER_INSTALL_SKIP=true` is set.
-- Keep test names descriptive; match the existing `Describe` / `Context` / `It` style.
+- Prefer descriptive `Describe`, `Context`, and `It` text that reads well with `-ginkgo.focus`.
 - Use `Eventually` for asynchronous Kubernetes behavior instead of sleeps.
-- Prefer package-local helpers when assertions are repeated.
+- In tests, prefer `Expect(err).NotTo(HaveOccurred())` or `Expect(...).To(Succeed())`.
+- Add package-local helpers when assertions repeat, but keep setup readable.
 
 ## Lint Expectations
 
-- Current linters include `errcheck`, `ginkgolinter`, `gocyclo`, `govet`, `misspell`, `nakedret`, `revive`, `staticcheck`, `unused`, and others.
-- `lll` and `dupl` are relaxed in some paths, but do not rely on exemptions unnecessarily.
-- `logcheck` will flag malformed structured logging.
-- `ginkgolinter` means Ginkgo tests should follow idiomatic Ginkgo patterns.
-
-## Kubernetes And Kubebuilder Specific Guidance
-
-- Use `kubebuilder` scaffolding commands for new APIs or webhooks instead of creating scaffold files manually.
-- Do not remove license headers from scaffolded Go files.
-- Keep API comments and markers near the fields and types they describe.
-- When changing CRD schemas, verify sample manifests still make sense.
-- The project is single-group today; APIs live under `api/v1alpha1` with group `releases.opmodel.dev`.
+- Enabled linters include `errcheck`, `ginkgolinter`, `gocyclo`, `govet`, `misspell`, `modernize`, `revive`, `staticcheck`, `unused`, and others.
+- `gofmt` and `goimports` are enforced via golangci-lint formatters.
+- `logcheck` validates structured logging calls and balanced key/value parameters.
+- `lll` and `dupl` are relaxed in parts of `api/*` and `internal/*`, but do not rely on those exclusions unnecessarily.
+- Write Ginkgo code idiomatically; `ginkgolinter` will flag non-idiomatic patterns.
 
 ## Verification Checklist For Agents
 
 - Ran `make manifests generate` after API or marker changes.
-- Ran `make fmt vet test` after Go code changes.
+- Ran `make fmt vet test` after meaningful Go changes.
 - Ran `make lint` or `make lint-fix` for non-trivial edits.
-- Avoided edits to generated files and scaffold markers.
-- Mentioned if e2e verification was skipped because Kind or cluster setup was not available.
+- Avoided manual edits to generated files and scaffold markers.
+- Mentioned if e2e verification was skipped because Kind or cluster setup was unavailable.
