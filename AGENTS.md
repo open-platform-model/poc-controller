@@ -21,6 +21,7 @@
 
 ## Repository Layout
 
+- `adr/` - Architecture Decision Records
 - `cmd/main.go`: manager entrypoint and controller registration.
 - `api/v1alpha1/*.go`: API schemas, validation markers, and shared CRD types.
 - `api/v1alpha1/zz_generated.deepcopy.go`: generated DeepCopy code; do not edit by hand.
@@ -32,6 +33,28 @@
 - `test/e2e/*.go`: Kind-backed end-to-end tests guarded by the `e2e` build tag.
 - `Makefile`: source of truth for generation, build, lint, test, and deploy workflows.
 - `Taskfile.yml`: convenience wrappers that delegate directly to `make` targets.
+
+## Architecture Decision Records
+
+ADRs capture significant technical decisions with their context and consequences.
+
+- Location: `adr/`
+- Template: `adr/TEMPLATE.md`
+- Naming: `NNN-kebab-case-title.md` (three-digit, zero-padded)
+
+### Creating a new ADR
+
+1. Copy `adr/TEMPLATE.md` to `adr/NNN-title.md` using the next available number.
+2. Set status to `Proposed`.
+3. Fill in Context, Decision, and Consequences.
+4. Update status to `Accepted` once the decision is agreed on.
+
+### Updating an ADR
+
+- Never delete an ADR — update its status instead.
+- To retire a decision: set status to `Deprecated`.
+- To replace a decision: set status to `Superseded by ADR-NNN` and create the new ADR.
+- One decision per ADR.
 
 ## Generated Files And Scaffold Boundaries
 
