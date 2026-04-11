@@ -1,13 +1,5 @@
 # Design Decisions — {Enhancement Title}
 
-| Field       | Value            |
-| ----------- | ---------------- |
-| **Status**  | Draft            |
-| **Created** | {YYYY-MM-DD}     |
-| **Authors** | OPM Contributors |
-
----
-
 ## Summary
 
 Decision log for all architectural and design choices made during this enhancement. Each decision is numbered sequentially and recorded as it is made. Decisions are append-only — do not remove or renumber existing entries. If a decision is reversed, add a new decision that supersedes it.

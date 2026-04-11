@@ -1,13 +1,5 @@
 # Design — {Enhancement Title}
 
-| Field       | Value            |
-| ----------- | ---------------- |
-| **Status**  | Draft            |
-| **Created** | {YYYY-MM-DD}     |
-| **Authors** | OPM Contributors |
-
----
-
 ## Design Goals
 
 {Bulleted list of what the solution must achieve. These are the acceptance criteria for the design — if the implementation meets all goals, it is correct.}

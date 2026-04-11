@@ -1,13 +1,5 @@
 # Problem Statement — {Enhancement Title}
 
-| Field       | Value            |
-| ----------- | ---------------- |
-| **Status**  | Draft            |
-| **Created** | {YYYY-MM-DD}     |
-| **Authors** | OPM Contributors |
-
----
-
 ## Current State
 
 {Describe how things work today. What is the existing behavior, architecture, or workflow that this enhancement touches? Reference specific files, definitions, or patterns where relevant.}
