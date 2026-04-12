@@ -21,9 +21,12 @@ import (
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	releasesv1alpha1 "github.com/open-platform-model/poc-controller/api/v1alpha1"
 )
@@ -56,15 +59,49 @@ func (r *ModuleReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// TODO: Resolve the referenced OCIRepository, fetch the Flux artifact,
 	// render the module using shared OPM helpers, and reconcile the desired
 	// resources with SSA and ownership inventory.
-	_ = sourcev1.OCIRepository{}
 
 	return ctrl.Result{}, nil
+}
+
+// ociRepositoryToRequests maps an OCIRepository change to all ModuleRelease
+// objects that reference it.
+func (r *ModuleReleaseReconciler) ociRepositoryToRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var releases releasesv1alpha1.ModuleReleaseList
+	if err := r.List(ctx, &releases, client.InNamespace(obj.GetNamespace())); err != nil {
+		log.Error(err, "Failed to list ModuleReleases for OCIRepository mapping")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, mr := range releases.Items {
+		ref := mr.Spec.SourceRef
+		ns := ref.Namespace
+		if ns == "" {
+			ns = mr.Namespace
+		}
+		if ref.Name == obj.GetName() && ns == obj.GetNamespace() {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      mr.Name,
+					Namespace: mr.Namespace,
+				},
+			})
+		}
+	}
+	return requests
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ModuleReleaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&releasesv1alpha1.ModuleRelease{}).
+		Watches(&sourcev1.OCIRepository{},
+			handler.EnqueueRequestsFromMapFunc(r.ociRepositoryToRequests)).
 		Named("modulerelease").
 		Complete(r)
 }
