@@ -1,4 +1,62 @@
 package status
 
-// ReadyCondition is the primary readiness condition type for releases.
-const ReadyCondition = "Ready"
+import (
+	"github.com/fluxcd/pkg/apis/meta"
+	"github.com/fluxcd/pkg/runtime/conditions"
+)
+
+// Condition types.
+// Ready, Reconciling, and Stalled are reexported from Flux meta for consistency.
+const (
+	ReadyCondition       = meta.ReadyCondition       // "Ready"
+	ReconcilingCondition = meta.ReconcilingCondition // "Reconciling"
+	StalledCondition     = meta.StalledCondition     // "Stalled"
+	SourceReadyCondition = "SourceReady"
+)
+
+// Condition reasons.
+const (
+	SuspendedReason               = "Suspended"
+	SourceNotReadyReason          = "SourceNotReady"
+	SourceUnavailableReason       = "SourceUnavailable"
+	ArtifactFetchFailedReason     = "ArtifactFetchFailed"
+	ArtifactInvalidReason         = "ArtifactInvalid"
+	RenderFailedReason            = "RenderFailed"
+	ApplyFailedReason             = "ApplyFailed"
+	PruneFailedReason             = "PruneFailed"
+	ReconciliationSucceededReason = "ReconciliationSucceeded"
+)
+
+// MarkReconciling sets Reconciling=True, removes Stalled, and sets Ready=Unknown.
+func MarkReconciling(obj conditions.Setter, reason, messageFormat string, messageArgs ...any) {
+	conditions.MarkReconciling(obj, reason, messageFormat, messageArgs...)
+	conditions.MarkUnknown(obj, ReadyCondition, reason, messageFormat, messageArgs...)
+}
+
+// MarkStalled sets Stalled=True, removes Reconciling, and sets Ready=False.
+func MarkStalled(obj conditions.Setter, reason, messageFormat string, messageArgs ...any) {
+	conditions.MarkStalled(obj, reason, messageFormat, messageArgs...)
+	conditions.MarkFalse(obj, ReadyCondition, reason, messageFormat, messageArgs...)
+}
+
+// MarkReady sets Ready=True and removes Reconciling and Stalled conditions.
+func MarkReady(obj conditions.Setter, messageFormat string, messageArgs ...any) {
+	conditions.Delete(obj, ReconcilingCondition)
+	conditions.Delete(obj, StalledCondition)
+	conditions.MarkTrue(obj, ReadyCondition, ReconciliationSucceededReason, messageFormat, messageArgs...)
+}
+
+// MarkNotReady sets Ready=False with the given reason and message.
+func MarkNotReady(obj conditions.Setter, reason, messageFormat string, messageArgs ...any) {
+	conditions.MarkFalse(obj, ReadyCondition, reason, messageFormat, messageArgs...)
+}
+
+// MarkSourceReady sets SourceReady=True with the artifact revision as message.
+func MarkSourceReady(obj conditions.Setter, revision string) {
+	conditions.MarkTrue(obj, SourceReadyCondition, "ArtifactAvailable", "artifact revision %s", revision)
+}
+
+// MarkSourceNotReady sets SourceReady=False with the given reason and message.
+func MarkSourceNotReady(obj conditions.Setter, reason, messageFormat string, messageArgs ...any) {
+	conditions.MarkFalse(obj, SourceReadyCondition, reason, messageFormat, messageArgs...)
+}
