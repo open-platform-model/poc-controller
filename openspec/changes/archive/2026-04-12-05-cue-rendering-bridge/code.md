@@ -22,7 +22,7 @@ import (
     "github.com/open-platform-model/poc-controller/pkg/loader"
     "github.com/open-platform-model/poc-controller/pkg/module"
     "github.com/open-platform-model/poc-controller/pkg/provider"
-    "github.com/open-platform-model/poc-controller/pkg/render"
+    pkgrender "github.com/open-platform-model/poc-controller/pkg/render"
 
     releasesv1alpha1 "github.com/open-platform-model/poc-controller/api/v1alpha1"
     "github.com/open-platform-model/poc-controller/internal/inventory"
@@ -57,14 +57,11 @@ type RenderResult struct {
 
 // module.Module — parsed module with Metadata, Config (#config schema), Raw (cue.Value).
 // module.ParseModuleRelease(ctx, spec, mod, values) (*module.Release, error)
-//   Step 3: validates values against #config, fills into spec, returns concrete release.
+//   Step 5: validates values against #config, fills into spec, returns concrete release.
 
-// loader.LoadProvider(providerName string, providers map[string]cue.Value) (*provider.Provider, error)
-//   Step 4: selects provider from module's bundled providers. Defaults to "kubernetes".
-
-// module.Process(ctx, rel, provider) (*render.ModuleResult, error)
-//   Step 5: runs match → execute pipeline, returns ModuleResult with []*core.Resource.
-//   (Relocated from render.ProcessModuleRelease in change 1, design decision 6.)
+// pkgrender.ProcessModuleRelease(ctx, rel, provider) (*render.ModuleResult, error)
+//   Step 6: runs match → execute pipeline, returns ModuleResult with []*core.Resource.
+//   Provider comes from caller (loaded at startup via catalog.LoadProvider in change 4).
 
 // render.ModuleResult.Resources []*core.Resource — the rendered output.
 // render.ModuleResult.Warnings []string — non-fatal warnings.
@@ -79,18 +76,20 @@ type RenderResult struct {
 //   1. loader.LoadModulePackage(cueCtx, moduleDir) → cue.Value
 //   2. Extract module metadata and #config schema
 //   3. Convert RawValues to cue.Value via cueCtx.CompileBytes (design decision 2)
-//   4. module.ParseModuleRelease(ctx, spec, mod, []cue.Value{values})
-//   5. Inject #runtimeLabels with managed-by: opm-controller via cue.Value.FillPath
-//   6. loader.LoadProvider("kubernetes", providers) from module artifact (design decision 3)
-//   7. module.Process(ctx, release, provider)
-//   8. Convert []*core.Resource to []v1alpha1.InventoryEntry via inventory bridge
+//   4. Inject #runtimeLabels with managed-by: opm-controller via cue.Value.FillPath
+//   5. module.ParseModuleRelease(ctx, spec, mod, []cue.Value{values})
+//   6. pkgrender.ProcessModuleRelease(ctx, release, prov) — provider from caller (design decision 3)
+//   7. Convert []*core.Resource to []v1alpha1.InventoryEntry via inventory bridge
 //
+// The provider is loaded from the controller-owned catalog at startup (change 4)
+// and passed through the reconciler. RenderModule does not load providers itself.
 // The values parameter may be nil if the module has no required config or has defaults.
 // Returns *errors.ConfigError (from pkg/errors) if values fail schema validation.
 func RenderModule(
     ctx context.Context,
     moduleDir string,
     values *releasesv1alpha1.RawValues,
+    prov *provider.Provider,
 ) (*RenderResult, error)
 ```
 
