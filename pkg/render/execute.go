@@ -48,6 +48,7 @@ func executeTransforms(
 	schemaComponents cue.Value,
 	dataComponents cue.Value,
 	rel *module.Release,
+	runtimeLabels map[string]string,
 ) ([]*core.Resource, []string, []error) {
 	resources := make([]*core.Resource, 0)
 	var warnings []string
@@ -60,7 +61,7 @@ func executeTransforms(
 		default:
 		}
 
-		res, pairWarnings, err := executePair(cueCtx, providerVal, schemaComponents, dataComponents, rel, pair)
+		res, pairWarnings, err := executePair(cueCtx, providerVal, schemaComponents, dataComponents, rel, pair, runtimeLabels)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -88,6 +89,7 @@ func executePair(
 	dataComponents cue.Value,
 	rel *module.Release,
 	pair MatchedPair,
+	runtimeLabels map[string]string,
 ) ([]*core.Resource, []string, error) {
 	compName := pair.ComponentName
 	tfFQN := pair.TransformerFQN
@@ -125,7 +127,7 @@ func executePair(
 
 	// Build and inject #context. Reads metadata from schemaComp (has definitions).
 	var warnings []string
-	unified, warnings, err := injectContext(cueCtx, unified, rel, compName, schemaComp)
+	unified, warnings, err := injectContext(cueCtx, unified, rel, compName, schemaComp, runtimeLabels)
 	if err != nil {
 		return nil, nil, fmt.Errorf("component %q / transformer %q: injecting #context: %w", compName, tfFQN, err)
 	}
@@ -188,6 +190,7 @@ func injectContext(
 	rel *module.Release,
 	compName string,
 	compVal cue.Value,
+	runtimeLabelsOverride map[string]string,
 ) (cue.Value, []string, error) {
 	var warnings []string
 
@@ -241,9 +244,14 @@ func injectContext(
 	// These take highest precedence in the label merge and are enforced by CUE
 	// unification: if a module or component label conflicts with a runtime label,
 	// CUE evaluation will error rather than silently overriding.
-	runtimeLabels := map[string]string{
-		core.LabelManagedBy:              core.LabelManagedByValue,
-		core.LabelModuleReleaseNamespace: rel.Metadata.Namespace,
+	// When runtimeLabelsOverride is provided (e.g., by the controller), it replaces
+	// the default CLI labels entirely.
+	runtimeLabels := runtimeLabelsOverride
+	if runtimeLabels == nil {
+		runtimeLabels = map[string]string{
+			core.LabelManagedBy:              core.LabelManagedByValue,
+			core.LabelModuleReleaseNamespace: rel.Metadata.Namespace,
+		}
 	}
 	unified = unified.FillPath(
 		cue.MakePath(cue.Def("context"), cue.Def("runtimeLabels")),

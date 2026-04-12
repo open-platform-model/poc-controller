@@ -10,7 +10,14 @@ import (
 
 // ProcessModuleRelease renders a prepared release with the given provider.
 // The release must already be fully prepared via module.ParseModuleRelease.
-func ProcessModuleRelease(ctx context.Context, rel *module.Release, p *provider.Provider) (*ModuleResult, error) {
+// If runtimeLabels is non-nil, it overrides the default runtime labels injected
+// into each transformer's #context.#runtimeLabels during execution.
+func ProcessModuleRelease(
+	ctx context.Context,
+	rel *module.Release,
+	p *provider.Provider,
+	runtimeLabels map[string]string,
+) (*ModuleResult, error) {
 	schemaComponents := rel.MatchComponents()
 	if !schemaComponents.Exists() {
 		return nil, fmt.Errorf("release %q: no components field in release spec", rel.Metadata.Name)
@@ -27,5 +34,6 @@ func ProcessModuleRelease(ctx context.Context, rel *module.Release, p *provider.
 	}
 
 	renderer := NewModule(p)
+	renderer.runtimeLabels = runtimeLabels
 	return renderer.Execute(ctx, rel, schemaComponents, dataComponents, plan)
 }

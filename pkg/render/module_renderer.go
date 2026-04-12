@@ -41,7 +41,8 @@ type ComponentSummary struct {
 // A Module is constructed once per provider and reused across multiple
 // Execute calls. It is not safe for concurrent use (CUE context is single-threaded).
 type Module struct {
-	provider *provider.Provider
+	provider      *provider.Provider
+	runtimeLabels map[string]string // overrides default #context.#runtimeLabels if non-nil
 }
 
 // ModuleResult holds the output of a successful Execute call.
@@ -101,6 +102,7 @@ func (r *Module) Execute(
 	resources, warnings, errs := executeTransforms(
 		ctx, cueCtx, plan, r.provider.Data,
 		schemaComponents, dataComponents, rel,
+		r.runtimeLabels,
 	)
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("executing transforms: %w", errors.Join(errs...))
