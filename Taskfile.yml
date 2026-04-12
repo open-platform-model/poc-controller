@@ -1,9 +1,13 @@
 version: '3'
 
+# Silent by default - set TASK_VERBOSE=1 or use --verbose to show commands
+silent: true
+
 tasks:
   default:
+    desc: Show available tasks
     cmds:
-      - task: help
+      - task --list
 
   help:
     desc: Show available tasks
