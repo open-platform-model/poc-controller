@@ -29,12 +29,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	releasesv1alpha1 "github.com/open-platform-model/poc-controller/api/v1alpha1"
+	"github.com/open-platform-model/poc-controller/pkg/provider"
 )
 
 // ModuleReleaseReconciler reconciles a ModuleRelease object
 type ModuleReleaseReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Provider *provider.Provider
 }
 
 // +kubebuilder:rbac:groups=releases.opmodel.dev,resources=modulereleases,verbs=get;list;watch;create;update;patch;delete

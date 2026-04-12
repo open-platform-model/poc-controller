@@ -37,6 +37,7 @@ import (
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	releasesv1alpha1 "github.com/open-platform-model/poc-controller/api/v1alpha1"
+	"github.com/open-platform-model/poc-controller/internal/catalog"
 	"github.com/open-platform-model/poc-controller/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -56,6 +57,10 @@ func init() {
 
 // nolint:gocyclo
 func main() {
+	var catalogPath string
+	var providerName string
+	var registry string
+	var cueCacheDir string
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -79,6 +84,14 @@ func main() {
 		"The directory that contains the metrics server certificate.")
 	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
+	flag.StringVar(&catalogPath, "catalog-path", "/catalog",
+		"The directory containing the OPM catalog CUE composition module.")
+	flag.StringVar(&providerName, "provider-name", "kubernetes",
+		"The provider to load from the catalog registry.")
+	flag.StringVar(&registry, "registry", "opmodel.dev=ghcr.io/open-platform-model,registry.cue.works",
+		"CUE registry mapping for resolving catalog module dependencies.")
+	flag.StringVar(&cueCacheDir, "cue-cache-dir", "/tmp/cue-cache",
+		"Directory for CUE module download cache.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	opts := zap.Options{
@@ -180,9 +193,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set CUE environment variables before any CUE loading.
+	// These must be set in main() before mgr.Start() spawns goroutines,
+	// because os.Setenv is not goroutine-safe.
+	for _, kv := range [][2]string{
+		{"CUE_REGISTRY", registry},
+		{"OPM_REGISTRY", registry},
+		{"CUE_CACHE_DIR", cueCacheDir},
+	} {
+		if err := os.Setenv(kv[0], kv[1]); err != nil {
+			setupLog.Error(err, "Failed to set environment variable", "key", kv[0])
+			os.Exit(1)
+		}
+	}
+
+	setupLog.Info("Loading OPM provider from catalog",
+		"catalog-path", catalogPath, "provider", providerName,
+		"registry", registry, "cue-cache-dir", cueCacheDir)
+	opmProvider, err := catalog.LoadProvider(catalogPath, providerName)
+	if err != nil {
+		setupLog.Error(err, "Failed to load OPM provider from catalog")
+		os.Exit(1)
+	}
+	setupLog.Info("OPM provider loaded", "provider", opmProvider.Metadata.Name)
+
 	if err := (&controller.ModuleReleaseReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Provider: opmProvider,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "ModuleRelease")
 		os.Exit(1)
