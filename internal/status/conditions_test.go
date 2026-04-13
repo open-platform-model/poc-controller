@@ -75,6 +75,21 @@ func TestMarkReady(t *testing.T) {
 	assert.Equal(t, ReconciliationSucceededReason, conditions.GetReason(obj, ReadyCondition))
 }
 
+func TestMarkSuspended(t *testing.T) {
+	obj := newModuleRelease()
+	// Set up pre-existing conditions that should be cleared.
+	MarkReconciling(obj, "Progressing", "working")
+	MarkStalled(obj, RenderFailedReason, "render error")
+
+	MarkSuspended(obj)
+
+	assert.True(t, conditions.IsFalse(obj, ReadyCondition))
+	assert.Equal(t, SuspendedReason, conditions.GetReason(obj, ReadyCondition))
+	assert.Equal(t, "Reconciliation is suspended", conditions.GetMessage(obj, ReadyCondition))
+	assert.False(t, conditions.Has(obj, ReconcilingCondition))
+	assert.False(t, conditions.Has(obj, StalledCondition))
+}
+
 func TestMarkNotReady(t *testing.T) {
 	obj := newModuleRelease()
 	MarkNotReady(obj, ArtifactFetchFailedReason, "fetch failed: timeout")

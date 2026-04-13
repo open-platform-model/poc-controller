@@ -8,6 +8,7 @@ import (
 	"time"
 
 	fluxssa "github.com/fluxcd/pkg/ssa"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -75,8 +76,34 @@ func ReconcileModuleRelease(
 		return ctrl.Result{}, handleDeletion(ctx, params, &mr)
 	}
 
-	// Create serial patcher for deferred status commit.
+	// Create serial patcher for status patching.
 	patcher := patch.NewSerialPatcher(&mr, params.Client)
+
+	// Suspend check — runs before deferred status commit to preserve existing status fields.
+	if mr.Spec.Suspend {
+		log.Info("Reconciliation is suspended")
+		status.MarkSuspended(&mr)
+		mr.Status.ObservedGeneration = mr.Generation
+		if patchErr := patcher.Patch(ctx, &mr,
+			patch.WithOwnedConditions{
+				Conditions: []string{
+					status.ReadyCondition,
+					status.ReconcilingCondition,
+					status.StalledCondition,
+					status.SourceReadyCondition,
+				},
+			},
+			patch.WithStatusObservedGeneration{},
+		); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Check for resume from suspend.
+	if ready := apimeta.FindStatusCondition(mr.Status.Conditions, status.ReadyCondition); ready != nil && ready.Reason == status.SuspendedReason {
+		log.Info("Reconciliation resumed")
+	}
 
 	// Track reconcile start time for duration calculation.
 	reconcileStart := time.Now()
@@ -143,14 +170,6 @@ func ReconcileModuleRelease(
 			log.Error(patchErr, "Failed to patch ModuleRelease status")
 		}
 	}()
-
-	// Suspend check.
-	if mr.Spec.Suspend {
-		log.Info("ModuleRelease is suspended, skipping reconciliation")
-		status.MarkReconciling(&mr, status.SuspendedReason, "Reconciliation is suspended")
-		outcome = SoftBlocked
-		return ctrl.Result{}, nil
-	}
 
 	// Mark reconciling at the start.
 	status.MarkReconciling(&mr, "Progressing", "Reconciliation in progress")

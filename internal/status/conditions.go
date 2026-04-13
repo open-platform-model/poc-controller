@@ -46,6 +46,13 @@ func MarkReady(obj conditions.Setter, messageFormat string, messageArgs ...any) 
 	conditions.MarkTrue(obj, ReadyCondition, ReconciliationSucceededReason, messageFormat, messageArgs...)
 }
 
+// MarkSuspended sets Ready=False with reason Suspended and removes Reconciling and Stalled conditions.
+func MarkSuspended(obj conditions.Setter) {
+	conditions.Delete(obj, ReconcilingCondition)
+	conditions.Delete(obj, StalledCondition)
+	conditions.MarkFalse(obj, ReadyCondition, SuspendedReason, "Reconciliation is suspended")
+}
+
 // MarkNotReady sets Ready=False with the given reason and message.
 func MarkNotReady(obj conditions.Setter, reason, messageFormat string, messageArgs ...any) {
 	conditions.MarkFalse(obj, ReadyCondition, reason, messageFormat, messageArgs...)

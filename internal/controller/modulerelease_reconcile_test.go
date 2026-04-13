@@ -197,7 +197,7 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 	})
 
 	Context("Suspend check", func() {
-		It("should skip reconciliation when suspend is true", func() {
+		It("should skip reconciliation when suspend is true and set correct conditions", func() {
 			ctx := context.Background()
 
 			mr := &releasesv1alpha1.ModuleRelease{
@@ -235,17 +235,209 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
 
-			// Verify the Reconciling condition is set with Suspended reason.
+			// Verify conditions: Ready=False/Suspended, Reconciling removed, Stalled removed.
 			var updated releasesv1alpha1.ModuleRelease
 			Expect(k8sClient.Get(ctx, nn, &updated)).To(Succeed())
 
+			ready := apimeta.FindStatusCondition(updated.Status.Conditions, status.ReadyCondition)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			Expect(ready.Reason).To(Equal(status.SuspendedReason))
+			Expect(ready.Message).To(Equal("Reconciliation is suspended"))
+
 			reconciling := apimeta.FindStatusCondition(updated.Status.Conditions, status.ReconcilingCondition)
-			Expect(reconciling).NotTo(BeNil())
-			Expect(reconciling.Status).To(Equal(metav1.ConditionTrue))
-			Expect(reconciling.Reason).To(Equal(status.SuspendedReason))
+			Expect(reconciling).To(BeNil())
+
+			stalled := apimeta.FindStatusCondition(updated.Status.Conditions, status.StalledCondition)
+			Expect(stalled).To(BeNil())
 
 			// Cleanup
 			Expect(k8sClient.Delete(ctx, mr)).To(Succeed())
+		})
+
+		It("should preserve existing status when suspend is true", func() {
+			ctx := context.Background()
+
+			createReadyOCIRepository(ctx, "suspend-preserve-repo")
+
+			mr := &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "suspend-preserve-mr",
+					Namespace: namespace,
+				},
+				Spec: releasesv1alpha1.ModuleReleaseSpec{
+					SourceRef: releasesv1alpha1.SourceReference{
+						APIVersion: "source.toolkit.fluxcd.io/v1",
+						Kind:       "OCIRepository",
+						Name:       "suspend-preserve-repo",
+					},
+					Module: releasesv1alpha1.ModuleReference{Path: "opmodel.dev/test/module"},
+					Values: &releasesv1alpha1.RawValues{},
+				},
+			}
+			mr.Spec.Values.Raw = []byte(`{"message": "hello"}`)
+			Expect(k8sClient.Create(ctx, mr)).To(Succeed())
+
+			reconciler := &ModuleReleaseReconciler{
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				Provider:        testProvider(),
+				ResourceManager: apply.NewResourceManager(k8sClient, "opm-controller"),
+				ArtifactFetcher: &copyDirFetcher{sourceDir: testModuleDir()},
+			}
+
+			nn := types.NamespacedName{Name: "suspend-preserve-mr", Namespace: namespace}
+
+			// Finalizer reconcile.
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Full reconcile — applies resources and populates status.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Capture status after successful reconcile.
+			var beforeSuspend releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &beforeSuspend)).To(Succeed())
+			Expect(beforeSuspend.Status.Inventory).NotTo(BeNil())
+			Expect(beforeSuspend.Status.LastAppliedSourceDigest).NotTo(BeEmpty())
+			Expect(beforeSuspend.Status.History).NotTo(BeEmpty())
+
+			savedInventory := beforeSuspend.Status.Inventory.DeepCopy()
+			savedAppliedSourceDigest := beforeSuspend.Status.LastAppliedSourceDigest
+			savedAppliedConfigDigest := beforeSuspend.Status.LastAppliedConfigDigest
+			savedAppliedRenderDigest := beforeSuspend.Status.LastAppliedRenderDigest
+			savedAttemptedSourceDigest := beforeSuspend.Status.LastAttemptedSourceDigest
+			savedAttemptedConfigDigest := beforeSuspend.Status.LastAttemptedConfigDigest
+			savedAttemptedRenderDigest := beforeSuspend.Status.LastAttemptedRenderDigest
+			savedHistoryLen := len(beforeSuspend.Status.History)
+
+			// Set suspend=true.
+			var current releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &current)).To(Succeed())
+			current.Spec.Suspend = true
+			Expect(k8sClient.Update(ctx, &current)).To(Succeed())
+
+			// Reconcile while suspended.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify status is preserved.
+			var afterSuspend releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &afterSuspend)).To(Succeed())
+
+			Expect(afterSuspend.Status.Inventory).NotTo(BeNil())
+			Expect(afterSuspend.Status.Inventory.Revision).To(Equal(savedInventory.Revision))
+			Expect(afterSuspend.Status.Inventory.Digest).To(Equal(savedInventory.Digest))
+			Expect(afterSuspend.Status.Inventory.Count).To(Equal(savedInventory.Count))
+			Expect(afterSuspend.Status.LastAppliedSourceDigest).To(Equal(savedAppliedSourceDigest))
+			Expect(afterSuspend.Status.LastAppliedConfigDigest).To(Equal(savedAppliedConfigDigest))
+			Expect(afterSuspend.Status.LastAppliedRenderDigest).To(Equal(savedAppliedRenderDigest))
+			Expect(afterSuspend.Status.LastAttemptedSourceDigest).To(Equal(savedAttemptedSourceDigest))
+			Expect(afterSuspend.Status.LastAttemptedConfigDigest).To(Equal(savedAttemptedConfigDigest))
+			Expect(afterSuspend.Status.LastAttemptedRenderDigest).To(Equal(savedAttemptedRenderDigest))
+			Expect(afterSuspend.Status.History).To(HaveLen(savedHistoryLen))
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-module", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: "suspend-preserve-mr", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &sourcev1.OCIRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "suspend-preserve-repo", Namespace: namespace},
+			})).To(Succeed())
+		})
+
+		It("should perform full reconcile when unsuspended", func() {
+			ctx := context.Background()
+
+			createReadyOCIRepository(ctx, "resume-repo")
+
+			mr := &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "resume-mr",
+					Namespace: namespace,
+				},
+				Spec: releasesv1alpha1.ModuleReleaseSpec{
+					Suspend: true,
+					SourceRef: releasesv1alpha1.SourceReference{
+						APIVersion: "source.toolkit.fluxcd.io/v1",
+						Kind:       "OCIRepository",
+						Name:       "resume-repo",
+					},
+					Module: releasesv1alpha1.ModuleReference{Path: "opmodel.dev/test/module"},
+					Values: &releasesv1alpha1.RawValues{},
+				},
+			}
+			mr.Spec.Values.Raw = []byte(`{"message": "hello"}`)
+			Expect(k8sClient.Create(ctx, mr)).To(Succeed())
+
+			reconciler := &ModuleReleaseReconciler{
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				Provider:        testProvider(),
+				ResourceManager: apply.NewResourceManager(k8sClient, "opm-controller"),
+				ArtifactFetcher: &copyDirFetcher{sourceDir: testModuleDir()},
+			}
+
+			nn := types.NamespacedName{Name: "resume-mr", Namespace: namespace}
+
+			// Finalizer reconcile.
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile hits suspend — no source resolution, no apply.
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			// Verify suspended state.
+			var suspended releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &suspended)).To(Succeed())
+			ready := apimeta.FindStatusCondition(suspended.Status.Conditions, status.ReadyCondition)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Reason).To(Equal(status.SuspendedReason))
+
+			// Unsuspend.
+			var current releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &current)).To(Succeed())
+			current.Spec.Suspend = false
+			Expect(k8sClient.Update(ctx, &current)).To(Succeed())
+
+			// Reconcile after unsuspend — should perform full reconcile.
+			result, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			// Verify full reconcile happened: Ready=True, resources applied.
+			var resumed releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &resumed)).To(Succeed())
+
+			readyAfter := apimeta.FindStatusCondition(resumed.Status.Conditions, status.ReadyCondition)
+			Expect(readyAfter).NotTo(BeNil())
+			Expect(readyAfter.Status).To(Equal(metav1.ConditionTrue))
+
+			// Inventory populated from the full reconcile.
+			Expect(resumed.Status.Inventory).NotTo(BeNil())
+			Expect(resumed.Status.Inventory.Count).To(Equal(int64(1)))
+
+			// ConfigMap was applied.
+			var cm corev1.ConfigMap
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-module", Namespace: namespace,
+			}, &cm)).To(Succeed())
+			Expect(cm.Data["message"]).To(Equal("hello"))
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &cm)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: "resume-mr", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &sourcev1.OCIRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "resume-repo", Namespace: namespace},
+			})).To(Succeed())
 		})
 	})
 
