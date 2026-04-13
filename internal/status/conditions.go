@@ -25,6 +25,7 @@ const (
 	RenderFailedReason            = "RenderFailed"
 	ApplyFailedReason             = "ApplyFailed"
 	PruneFailedReason             = "PruneFailed"
+	ImpersonationFailedReason     = "ImpersonationFailed"
 	ReconciliationSucceededReason = "ReconciliationSucceeded"
 	DriftDetectedReason           = "DriftDetected"
 )

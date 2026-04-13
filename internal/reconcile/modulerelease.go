@@ -8,9 +8,11 @@ import (
 	"time"
 
 	fluxssa "github.com/fluxcd/pkg/ssa"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,6 +42,7 @@ const (
 // ModuleReleaseParams holds the dependencies injected into the reconcile loop.
 type ModuleReleaseParams struct {
 	Client          client.Client
+	RestConfig      *rest.Config
 	Provider        *provider.Provider
 	ResourceManager *fluxssa.ResourceManager
 	ArtifactFetcher source.Fetcher
@@ -179,25 +182,7 @@ func ReconcileModuleRelease(
 	// Phase 1: Resolve source.
 	artifactRef, err := source.Resolve(ctx, params.Client, mr.Spec.SourceRef, mr.Namespace)
 	if err != nil {
-		if errors.Is(err, source.ErrSourceNotReady) {
-			status.MarkSourceNotReady(&mr, status.SourceNotReadyReason, "%s", err)
-			outcome = SoftBlocked
-			errMsg = err.Error()
-			return ctrl.Result{RequeueAfter: softBlockedRequeue}, nil
-		}
-		if errors.Is(err, source.ErrSourceNotFound) {
-			status.MarkSourceNotReady(&mr, status.SourceUnavailableReason, "%s", err)
-			status.MarkStalled(&mr, status.SourceUnavailableReason, "%s", err)
-			outcome = FailedStalled
-			errMsg = err.Error()
-			return ctrl.Result{}, nil
-		}
-		// Transient error (e.g., API server unreachable).
-		status.MarkSourceNotReady(&mr, status.SourceUnavailableReason, "%s", err)
-		status.MarkNotReady(&mr, status.SourceUnavailableReason, "%s", err)
-		outcome = FailedTransient
-		errMsg = err.Error()
-		return ctrl.Result{}, err
+		return sourceError(&mr, err, &outcome, &errMsg)
 	}
 
 	status.MarkSourceReady(&mr, artifactRef.Revision)
@@ -295,10 +280,26 @@ func ReconcileModuleRelease(
 	}
 	staleSet := inventory.ComputeStaleSet(previousEntries, renderResult.InventoryEntries)
 
+	// Build impersonated client and resource manager if serviceAccountName is set.
+	// Apply and prune use the impersonated identity; all other phases use the controller's own client.
+	applyRM, applyClient, impErr := buildApplyClient(ctx, params, &mr)
+	if impErr != nil {
+		status.MarkStalled(&mr, status.ImpersonationFailedReason, "%s", impErr)
+		outcome = FailedStalled
+		errMsg = impErr.Error()
+		return ctrl.Result{}, nil
+	}
+
 	// Phase 5: Apply resources.
 	force := mr.Spec.Rollout != nil && mr.Spec.Rollout.ForceConflicts
-	applyResult, err := apply.Apply(ctx, params.ResourceManager, resources, force)
+	applyResult, err := apply.Apply(ctx, applyRM, resources, force)
 	if err != nil {
+		if mr.Spec.ServiceAccountName != "" && isForbidden(err) {
+			status.MarkStalled(&mr, status.ImpersonationFailedReason, "%s", err)
+			outcome = FailedStalled
+			errMsg = err.Error()
+			return ctrl.Result{}, nil
+		}
 		status.MarkNotReady(&mr, status.ApplyFailedReason, "%s", err)
 		outcome = FailedTransient
 		errMsg = err.Error()
@@ -314,22 +315,10 @@ func ReconcileModuleRelease(
 	newEntries = renderResult.InventoryEntries
 
 	// Phase 6: Prune stale resources (only if spec.prune=true and apply succeeded).
-	if mr.Spec.Prune && len(staleSet) > 0 {
-		pruneResult, err := apply.Prune(ctx, params.Client, staleSet)
-		if err != nil {
-			status.MarkNotReady(&mr, status.PruneFailedReason, "%s", err)
-			outcome = FailedTransient
-			errMsg = err.Error()
-			// Apply succeeded but prune failed — do NOT update inventory.
-			reconciled = false
-			return ctrl.Result{}, err
-		}
-		log.Info("Pruned stale resources", "deleted", pruneResult.Deleted, "skipped", pruneResult.Skipped)
-		reconciled = true
-		outcome = AppliedAndPruned
-	} else {
-		reconciled = true
-		outcome = Applied
+	outcome, reconciled, err = pruneStaleResources(ctx, &mr, applyClient, staleSet)
+	if err != nil {
+		errMsg = err.Error()
+		return ctrl.Result{}, err
 	}
 
 	// Phase 7: Commit status (handled by deferred function).
@@ -388,7 +377,17 @@ func handleDeletion(
 	log.Info("Running deletion cleanup for ModuleRelease")
 
 	if mr.Spec.Prune && mr.Status.Inventory != nil && len(mr.Status.Inventory.Entries) > 0 {
-		pruneResult, err := apply.Prune(ctx, params.Client, mr.Status.Inventory.Entries)
+		deleteClient := params.Client
+		if mr.Spec.ServiceAccountName != "" && params.RestConfig != nil {
+			impClient, impErr := apply.NewImpersonatedClient(ctx, params.RestConfig, params.Client, mr.Namespace, mr.Spec.ServiceAccountName)
+			if impErr != nil {
+				log.Info("ServiceAccount unavailable for deletion cleanup, using controller client",
+					"serviceAccount", mr.Spec.ServiceAccountName, "error", impErr)
+			} else {
+				deleteClient = impClient
+			}
+		}
+		pruneResult, err := apply.Prune(ctx, deleteClient, mr.Status.Inventory.Entries)
 		if err != nil {
 			log.Error(err, "Partial failure during deletion cleanup, retaining finalizer")
 			return err
@@ -419,6 +418,87 @@ func removeFinalizer(ctx context.Context, c client.Client, mr *releasesv1alpha1.
 	mergePatch := client.MergeFrom(mr.DeepCopy())
 	controllerutil.RemoveFinalizer(mr, FinalizerName)
 	return c.Patch(ctx, mr, mergePatch)
+}
+
+// pruneStaleResources runs Phase 6: prune stale resources if spec.prune is true and stale resources exist.
+// Returns the outcome, whether reconcile succeeded, and any error.
+func pruneStaleResources(
+	ctx context.Context,
+	mr *releasesv1alpha1.ModuleRelease,
+	c client.Client,
+	staleSet []releasesv1alpha1.InventoryEntry,
+) (Outcome, bool, error) {
+	if !mr.Spec.Prune || len(staleSet) == 0 {
+		return Applied, true, nil
+	}
+	log := logf.FromContext(ctx)
+	pruneResult, err := apply.Prune(ctx, c, staleSet)
+	if err != nil {
+		if mr.Spec.ServiceAccountName != "" && isForbidden(err) {
+			status.MarkStalled(mr, status.ImpersonationFailedReason, "%s", err)
+			return FailedStalled, false, nil
+		}
+		status.MarkNotReady(mr, status.PruneFailedReason, "%s", err)
+		return FailedTransient, false, err
+	}
+	log.Info("Pruned stale resources", "deleted", pruneResult.Deleted, "skipped", pruneResult.Skipped)
+	return AppliedAndPruned, true, nil
+}
+
+// sourceError classifies a source resolution error, sets conditions, and writes
+// the outcome and error message into the caller's deferred-captured variables.
+func sourceError(
+	mr *releasesv1alpha1.ModuleRelease,
+	err error,
+	outcome *Outcome,
+	errMsg *string,
+) (ctrl.Result, error) {
+	*errMsg = err.Error()
+	if errors.Is(err, source.ErrSourceNotReady) {
+		status.MarkSourceNotReady(mr, status.SourceNotReadyReason, "%s", err)
+		*outcome = SoftBlocked
+		return ctrl.Result{RequeueAfter: softBlockedRequeue}, nil
+	}
+	if errors.Is(err, source.ErrSourceNotFound) {
+		status.MarkSourceNotReady(mr, status.SourceUnavailableReason, "%s", err)
+		status.MarkStalled(mr, status.SourceUnavailableReason, "%s", err)
+		*outcome = FailedStalled
+		return ctrl.Result{}, nil
+	}
+	// Transient error (e.g., API server unreachable).
+	status.MarkSourceNotReady(mr, status.SourceUnavailableReason, "%s", err)
+	status.MarkNotReady(mr, status.SourceUnavailableReason, "%s", err)
+	*outcome = FailedTransient
+	return ctrl.Result{}, err
+}
+
+// isForbidden returns true if the error chain contains a Kubernetes Forbidden (403) status error.
+// Flux SSA wraps API errors, so this unwraps through the chain.
+func isForbidden(err error) bool {
+	var statusErr *apierrors.StatusError
+	if errors.As(err, &statusErr) {
+		return apierrors.IsForbidden(statusErr)
+	}
+	return false
+}
+
+// buildApplyClient returns the ResourceManager and client to use for apply and prune.
+// If serviceAccountName is set, it builds an impersonated client; otherwise it returns the defaults.
+func buildApplyClient(
+	ctx context.Context,
+	params *ModuleReleaseParams,
+	mr *releasesv1alpha1.ModuleRelease,
+) (*fluxssa.ResourceManager, client.Client, error) {
+	if mr.Spec.ServiceAccountName == "" {
+		return params.ResourceManager, params.Client, nil
+	}
+	log := logf.FromContext(ctx)
+	log.Info("Building impersonated client", "serviceAccount", mr.Spec.ServiceAccountName)
+	impClient, err := apply.NewImpersonatedClient(ctx, params.RestConfig, params.Client, mr.Namespace, mr.Spec.ServiceAccountName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return apply.NewResourceManager(impClient, "opm-controller"), impClient, nil
 }
 
 // toUnstructuredSlice converts core.Resource slice to unstructured slice for apply.

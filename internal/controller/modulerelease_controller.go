@@ -23,6 +23,7 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -40,6 +41,7 @@ import (
 type ModuleReleaseReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
+	RestConfig      *rest.Config
 	Provider        *provider.Provider
 	ResourceManager *fluxssa.ResourceManager
 	ArtifactFetcher source.Fetcher
@@ -50,6 +52,7 @@ type ModuleReleaseReconciler struct {
 // +kubebuilder:rbac:groups=releases.opmodel.dev,resources=modulereleases/finalizers,verbs=update
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=ocirepositories,verbs=get;list;watch
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=ocirepositories/status,verbs=get
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;impersonate
 
 // Reconcile runs the full ModuleRelease reconcile loop: source resolution,
 // artifact fetch, CUE rendering, SSA apply, optional prune, and status commit.
@@ -59,6 +62,7 @@ func (r *ModuleReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	return opmreconcile.ReconcileModuleRelease(ctx, &opmreconcile.ModuleReleaseParams{
 		Client:          r.Client,
+		RestConfig:      r.RestConfig,
 		Provider:        r.Provider,
 		ResourceManager: r.ResourceManager,
 		ArtifactFetcher: r.ArtifactFetcher,

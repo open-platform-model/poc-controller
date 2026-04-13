@@ -171,7 +171,8 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	restConfig := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -224,6 +225,7 @@ func main() {
 	if err := (&controller.ModuleReleaseReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
+		RestConfig:      restConfig,
 		Provider:        opmProvider,
 		ResourceManager: resourceManager,
 		ArtifactFetcher: &source.ArtifactFetcher{},

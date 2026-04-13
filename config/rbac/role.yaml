@@ -5,6 +5,13 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - get
+  - impersonate
+- apiGroups:
   - releases.opmodel.dev
   resources:
   - bundlereleases
