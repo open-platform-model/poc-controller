@@ -200,7 +200,8 @@ var _ = Describe("Drift Detection", func() {
 
 			var mr releasesv1alpha1.ModuleRelease
 			Expect(k8sClient.Get(ctx, nn, &mr)).To(Succeed())
-			Expect(mr.Status.FailureCounters).To(BeNil())
+			Expect(mr.Status.FailureCounters).NotTo(BeNil())
+			Expect(mr.Status.FailureCounters.Drift).To(Equal(int64(0)))
 
 			By("constructing a ResourceManager with a client that fails on Patch (SSA dry-run)")
 			realClient, err := client.NewWithWatch(cfg, client.Options{})

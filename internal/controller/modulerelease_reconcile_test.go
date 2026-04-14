@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
@@ -28,7 +29,9 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -989,6 +992,259 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			// Cleanup: remove finalizer manually so the object can be deleted.
 			controllerutil.RemoveFinalizer(&updated, opmreconcile.FinalizerName)
 			Expect(k8sClient.Update(ctx, &updated)).To(Succeed())
+		})
+	})
+
+	Context("Failure counters", func() {
+		It("should increment reconcile counter on failed reconcile", func() {
+			ctx := context.Background()
+
+			// ModuleRelease points to a non-existent source → FailedStalled.
+			createModuleRelease(ctx, "counter-fail-mr", "nonexistent-source")
+
+			reconciler := &ModuleReleaseReconciler{
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				ArtifactFetcher: &stubFetcher{},
+			}
+
+			nn := types.NamespacedName{Name: "counter-fail-mr", Namespace: namespace}
+
+			// First reconcile adds finalizer.
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile fails (source not found → FailedStalled).
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred()) // FailedStalled returns nil error
+
+			var mr releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &mr)).To(Succeed())
+			Expect(mr.Status.FailureCounters).NotTo(BeNil())
+			Expect(mr.Status.FailureCounters.Reconcile).To(Equal(int64(1)))
+
+			// Third reconcile increments again.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, &mr)).To(Succeed())
+			Expect(mr.Status.FailureCounters.Reconcile).To(Equal(int64(2)))
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: "counter-fail-mr", Namespace: namespace},
+			})).To(Succeed())
+		})
+
+		It("should increment apply counter on apply failure", func() {
+			ctx := context.Background()
+
+			createReadyOCIRepository(ctx, "apply-fail-repo")
+			createModuleRelease(ctx, "apply-fail-mr", "apply-fail-repo")
+
+			nn := types.NamespacedName{Name: "apply-fail-mr", Namespace: namespace}
+
+			// First reconcile adds finalizer.
+			realReconciler := &ModuleReleaseReconciler{
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				Provider:        testProvider(),
+				ResourceManager: apply.NewResourceManager(k8sClient, "opm-controller"),
+				ArtifactFetcher: &copyDirFetcher{sourceDir: testModuleDir()},
+			}
+			_, err := realReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// ResourceManager with a client that fails all Patch calls (SSA apply).
+			realWithWatch, watchErr := client.NewWithWatch(cfg, client.Options{Scheme: scheme.Scheme})
+			Expect(watchErr).NotTo(HaveOccurred())
+			failingClient := interceptor.NewClient(realWithWatch, interceptor.Funcs{
+				Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+					return fmt.Errorf("injected apply failure")
+				},
+			})
+
+			failReconciler := &ModuleReleaseReconciler{
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				Provider:        testProvider(),
+				ResourceManager: apply.NewResourceManager(failingClient, "opm-controller"),
+				ArtifactFetcher: &copyDirFetcher{sourceDir: testModuleDir()},
+			}
+
+			// Second reconcile — drift detection fails (non-blocking), apply fails.
+			_, err = failReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).To(HaveOccurred())
+
+			var mr releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &mr)).To(Succeed())
+			Expect(mr.Status.FailureCounters).NotTo(BeNil())
+			Expect(mr.Status.FailureCounters.Apply).To(Equal(int64(1)))
+			Expect(mr.Status.FailureCounters.Drift).To(Equal(int64(1)))
+			Expect(mr.Status.FailureCounters.Reconcile).To(Equal(int64(1)))
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: "apply-fail-mr", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &sourcev1.OCIRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "apply-fail-repo", Namespace: namespace},
+			})).To(Succeed())
+		})
+
+		It("should increment prune counter on prune failure", func() {
+			ctx := context.Background()
+
+			createReadyOCIRepository(ctx, "prune-fail-repo")
+
+			// Create MR with prune enabled.
+			mr := &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "prune-fail-mr",
+					Namespace: namespace,
+				},
+				Spec: releasesv1alpha1.ModuleReleaseSpec{
+					Prune: true,
+					SourceRef: releasesv1alpha1.SourceReference{
+						APIVersion: "source.toolkit.fluxcd.io/v1",
+						Kind:       "OCIRepository",
+						Name:       "prune-fail-repo",
+					},
+					Module: releasesv1alpha1.ModuleReference{
+						Path: "opmodel.dev/test/module",
+					},
+					Values: &releasesv1alpha1.RawValues{},
+				},
+			}
+			mr.Spec.Values.Raw = []byte(`{"message": "hello"}`)
+			Expect(k8sClient.Create(ctx, mr)).To(Succeed())
+
+			nn := types.NamespacedName{Name: "prune-fail-mr", Namespace: namespace}
+
+			realReconciler := &ModuleReleaseReconciler{
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				Provider:        testProvider(),
+				ResourceManager: apply.NewResourceManager(k8sClient, "opm-controller"),
+				ArtifactFetcher: &copyDirFetcher{sourceDir: testModuleDir()},
+			}
+
+			// Finalizer reconcile.
+			_, err := realReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Full reconcile — applies resources, creates inventory.
+			_, err = realReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Add a fake stale entry to the inventory.
+			Expect(k8sClient.Get(ctx, nn, mr)).To(Succeed())
+			mr.Status.Inventory.Entries = append(mr.Status.Inventory.Entries,
+				releasesv1alpha1.InventoryEntry{
+					Version: "v1", Kind: "ConfigMap",
+					Namespace: namespace, Name: "stale-cm",
+				})
+			Expect(k8sClient.Status().Update(ctx, mr)).To(Succeed())
+
+			// Change values to avoid no-op detection.
+			Expect(k8sClient.Get(ctx, nn, mr)).To(Succeed())
+			mr.Spec.Values.Raw = []byte(`{"message": "world"}`)
+			Expect(k8sClient.Update(ctx, mr)).To(Succeed())
+
+			// Reconciler with Delete interceptor that fails for the stale resource.
+			realWithWatch2, watchErr := client.NewWithWatch(cfg, client.Options{Scheme: scheme.Scheme})
+			Expect(watchErr).NotTo(HaveOccurred())
+			failingDeleteClient := interceptor.NewClient(realWithWatch2, interceptor.Funcs{
+				Delete: func(_ context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					if obj.GetName() == "stale-cm" {
+						return fmt.Errorf("injected delete failure")
+					}
+					return c.Delete(ctx, obj, opts...)
+				},
+			})
+
+			pruneFailReconciler := &ModuleReleaseReconciler{
+				Client:          failingDeleteClient,
+				Scheme:          k8sClient.Scheme(),
+				Provider:        testProvider(),
+				ResourceManager: apply.NewResourceManager(k8sClient, "opm-controller"),
+				ArtifactFetcher: &copyDirFetcher{sourceDir: testModuleDir()},
+			}
+
+			// Third reconcile — apply succeeds, prune fails.
+			_, err = pruneFailReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).To(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, mr)).To(Succeed())
+			Expect(mr.Status.FailureCounters).NotTo(BeNil())
+			Expect(mr.Status.FailureCounters.Prune).To(Equal(int64(1)))
+			Expect(mr.Status.FailureCounters.Apply).To(Equal(int64(0)))
+			Expect(mr.Status.FailureCounters.Reconcile).To(Equal(int64(1)))
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-module", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: "prune-fail-mr", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &sourcev1.OCIRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "prune-fail-repo", Namespace: namespace},
+			})).To(Succeed())
+		})
+
+		It("should reset counters on successful reconcile", func() {
+			ctx := context.Background()
+
+			createReadyOCIRepository(ctx, "counter-reset-repo")
+			createModuleRelease(ctx, "counter-reset-mr", "counter-reset-repo")
+
+			reconciler := &ModuleReleaseReconciler{
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				Provider:        testProvider(),
+				ResourceManager: apply.NewResourceManager(k8sClient, "opm-controller"),
+				ArtifactFetcher: &copyDirFetcher{sourceDir: testModuleDir()},
+			}
+
+			nn := types.NamespacedName{Name: "counter-reset-mr", Namespace: namespace}
+
+			// Finalizer reconcile.
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Pre-seed failure counters to simulate prior failures.
+			var mr releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &mr)).To(Succeed())
+			mr.Status.FailureCounters = &releasesv1alpha1.FailureCounters{
+				Reconcile: 5,
+				Apply:     3,
+				Prune:     2,
+				Drift:     1,
+			}
+			Expect(k8sClient.Status().Update(ctx, &mr)).To(Succeed())
+
+			// Full reconcile — succeeds and should reset counters.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, &mr)).To(Succeed())
+			Expect(mr.Status.FailureCounters).NotTo(BeNil())
+			Expect(mr.Status.FailureCounters.Reconcile).To(Equal(int64(0)))
+			Expect(mr.Status.FailureCounters.Apply).To(Equal(int64(0)))
+			Expect(mr.Status.FailureCounters.Prune).To(Equal(int64(0)))
+			Expect(mr.Status.FailureCounters.Drift).To(Equal(int64(0)))
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-module", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: "counter-reset-mr", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &sourcev1.OCIRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "counter-reset-repo", Namespace: namespace},
+			})).To(Succeed())
 		})
 	})
 })

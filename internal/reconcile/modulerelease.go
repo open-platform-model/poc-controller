@@ -119,6 +119,9 @@ func ReconcileModuleRelease(
 		reconciled bool // true if apply (and optional prune) succeeded
 		newEntries []releasesv1alpha1.InventoryEntry
 		errMsg     string
+
+		// Phase outcome tracking for failure counters (updated in Phase 7).
+		phases phaseOutcomes
 	)
 
 	// Deferred status commit — always patches status regardless of outcome.
@@ -159,6 +162,9 @@ func ReconcileModuleRelease(
 			status.RecordHistory(&mr.Status, entry)
 		}
 		// NoOp does not record history (per design doc).
+
+		// Update failure counters based on phase outcomes.
+		updateFailureCounters(&mr.Status, outcome, phases)
 
 		if patchErr := patcher.Patch(ctx, &mr,
 			patch.WithOwnedConditions{
@@ -265,7 +271,8 @@ func ReconcileModuleRelease(
 
 	// Drift detection runs on every reconcile, including no-ops.
 	// Uses SSA dry-run to compare desired state against live cluster state.
-	detectDrift(ctx, params.ResourceManager, &mr, resources)
+	phases.driftRan = true
+	phases.driftFailed = detectDrift(ctx, params.ResourceManager, &mr, resources)
 
 	if isNoOp {
 		log.Info("No changes detected, skipping apply")
@@ -291,9 +298,11 @@ func ReconcileModuleRelease(
 	}
 
 	// Phase 5: Apply resources.
+	phases.applyRan = true
 	force := mr.Spec.Rollout != nil && mr.Spec.Rollout.ForceConflicts
 	applyResult, err := apply.Apply(ctx, applyRM, resources, force)
 	if err != nil {
+		phases.applyFailed = true
 		if mr.Spec.ServiceAccountName != "" && isForbidden(err) {
 			status.MarkStalled(&mr, status.ImpersonationFailedReason, "%s", err)
 			outcome = FailedStalled
@@ -315,10 +324,15 @@ func ReconcileModuleRelease(
 	newEntries = renderResult.InventoryEntries
 
 	// Phase 6: Prune stale resources (only if spec.prune=true and apply succeeded).
+	phases.pruneRan = true
 	outcome, reconciled, err = pruneStaleResources(ctx, &mr, applyClient, staleSet)
 	if err != nil {
+		phases.pruneFailed = true
 		errMsg = err.Error()
 		return ctrl.Result{}, err
+	}
+	if !reconciled {
+		phases.pruneFailed = true
 	}
 
 	// Phase 7: Commit status (handled by deferred function).
@@ -328,25 +342,74 @@ func ReconcileModuleRelease(
 	return ctrl.Result{}, nil
 }
 
+// phaseOutcomes tracks which phases ran and whether they failed,
+// for deferred failure counter updates in Phase 7.
+type phaseOutcomes struct {
+	driftRan    bool
+	driftFailed bool
+	applyRan    bool
+	applyFailed bool
+	pruneRan    bool
+	pruneFailed bool
+}
+
+// updateFailureCounters applies failure counter increments and resets
+// based on which phases ran and the overall reconcile outcome.
+func updateFailureCounters(
+	mrStatus *releasesv1alpha1.ModuleReleaseStatus,
+	outcome Outcome,
+	phases phaseOutcomes,
+) {
+	counters := status.EnsureCounters(mrStatus)
+
+	if phases.driftRan {
+		if phases.driftFailed {
+			status.IncrementCounter(counters, status.CounterDrift)
+		} else {
+			status.ResetCounter(counters, status.CounterDrift)
+		}
+	}
+
+	if phases.applyRan {
+		if phases.applyFailed {
+			status.IncrementCounter(counters, status.CounterApply)
+		} else {
+			status.ResetCounter(counters, status.CounterApply)
+		}
+	}
+
+	if phases.pruneRan {
+		if phases.pruneFailed {
+			status.IncrementCounter(counters, status.CounterPrune)
+		} else {
+			status.ResetCounter(counters, status.CounterPrune)
+		}
+	}
+
+	switch outcome {
+	case FailedTransient, FailedStalled:
+		status.IncrementCounter(counters, status.CounterReconcile)
+	case Applied, AppliedAndPruned, NoOp:
+		status.ResetCounter(counters, status.CounterReconcile)
+	}
+}
+
 // detectDrift runs SSA dry-run drift detection and updates status accordingly.
-// On error: increments failureCounters.drift but does not set Drifted condition (unknown state).
+// Returns true if drift detection failed (API error).
 // On drift: sets Drifted=True. On no drift: clears Drifted condition.
+// Counter updates are deferred to Phase 7 based on the returned bool.
 // Drift detection failure is non-blocking.
 func detectDrift(
 	ctx context.Context,
 	rm *fluxssa.ResourceManager,
 	mr *releasesv1alpha1.ModuleRelease,
 	resources []*unstructured.Unstructured,
-) {
+) bool {
 	log := logf.FromContext(ctx)
 	driftResult, err := apply.DetectDrift(ctx, rm, resources)
 	if err != nil {
 		log.Error(err, "Drift detection failed, continuing reconcile")
-		if mr.Status.FailureCounters == nil {
-			mr.Status.FailureCounters = &releasesv1alpha1.FailureCounters{}
-		}
-		mr.Status.FailureCounters.Drift++
-		return
+		return true
 	}
 	if driftResult.Drifted {
 		log.Info("Drift detected", "driftedResources", len(driftResult.Resources))
@@ -354,6 +417,7 @@ func detectDrift(
 	} else {
 		status.ClearDrifted(mr)
 	}
+	return false
 }
 
 // inventoryDigest returns the digest from the inventory, or empty string if nil.
