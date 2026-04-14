@@ -108,3 +108,33 @@ tasks:
     desc: Uninstall Flux
     cmds:
       - make uninstall-flux
+
+  local-run:
+    desc: Deploy controller to local Kind cluster (full setup)
+    cmds:
+      - make local-run
+
+  local-clean:
+    desc: Tear down local Kind cluster and deployment
+    cmds:
+      - make local-clean
+
+  apply-samples:
+    desc: Apply sample CRs to the cluster
+    cmds:
+      - make apply-samples
+
+  start-registry:
+    desc: Start the local OCI registry
+    cmds:
+      - make start-registry
+
+  connect-registry:
+    desc: Connect local registry to Kind network
+    cmds:
+      - make connect-registry
+
+  publish-test-module:
+    desc: Publish test hello module to local registry
+    cmds:
+      - make publish-test-module

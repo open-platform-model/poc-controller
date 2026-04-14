@@ -146,6 +146,21 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
 
+##@ Local Workflow
+
+.PHONY: apply-samples
+apply-samples: ## Apply sample OCIRepository and ModuleRelease CRs to the cluster.
+	$(KUBECTL) apply -f config/samples/source_v1_ocirepository.yaml -f config/samples/releases_v1alpha1_modulerelease.yaml
+
+.PHONY: local-run
+local-run: setup-test-e2e start-registry connect-registry install-flux publish-test-module kind-load deploy apply-samples ## Deploy controller to local Kind cluster (full setup).
+
+.PHONY: local-clean
+local-clean: ## Tear down local Kind cluster and deployment.
+	-$(MAKE) undeploy ignore-not-found=true
+	-$(MAKE) uninstall-flux
+	$(MAKE) cleanup-test-e2e
+
 ##@ Kind
 
 .PHONY: kind-load
@@ -176,6 +191,36 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ Registry
+
+REGISTRY_CONTAINER ?= opm-registry
+REGISTRY_PORT ?= 5000
+REGISTRY_IMAGE ?= registry:2
+CUE_REGISTRY ?= opmodel.dev=localhost:$(REGISTRY_PORT)+insecure,registry.cue.works
+TEST_MODULE_DIR ?= test/fixtures/modules/hello
+
+.PHONY: start-registry
+start-registry: ## Start the local OCI registry container if not running.
+	@if ! $(CONTAINER_TOOL) ps --filter name=$(REGISTRY_CONTAINER) --format '{{.Names}}' | grep -q $(REGISTRY_CONTAINER); then \
+		if $(CONTAINER_TOOL) ps -a --filter name=$(REGISTRY_CONTAINER) --format '{{.Names}}' | grep -q $(REGISTRY_CONTAINER); then \
+			echo "Starting existing $(REGISTRY_CONTAINER) container..."; \
+			$(CONTAINER_TOOL) start $(REGISTRY_CONTAINER); \
+		else \
+			echo "Creating $(REGISTRY_CONTAINER) container..."; \
+			$(CONTAINER_TOOL) run -d --name $(REGISTRY_CONTAINER) -p $(REGISTRY_PORT):5000 --restart=unless-stopped $(REGISTRY_IMAGE); \
+		fi \
+	else \
+		echo "$(REGISTRY_CONTAINER) is already running."; \
+	fi
+
+.PHONY: connect-registry
+connect-registry: ## Connect the local registry to the Kind Docker network.
+	-$(CONTAINER_TOOL) network connect kind $(REGISTRY_CONTAINER)
+
+.PHONY: publish-test-module
+publish-test-module: ## Publish the test hello module to the local registry.
+	cd $(TEST_MODULE_DIR) && CUE_REGISTRY=$(CUE_REGISTRY) cue mod tidy && CUE_REGISTRY=$(CUE_REGISTRY) cue mod publish v0.0.1
 
 ##@ Flux
 
