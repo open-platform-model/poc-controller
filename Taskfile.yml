@@ -93,3 +93,13 @@ tasks:
     desc: Build consolidated install manifest
     cmds:
       - make build-installer
+
+  install-flux:
+    desc: Install Flux source-controller
+    cmds:
+      - make install-flux
+
+  uninstall-flux:
+    desc: Uninstall Flux
+    cmds:
+      - make uninstall-flux

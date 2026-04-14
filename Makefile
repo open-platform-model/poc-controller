@@ -171,6 +171,20 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
+##@ Flux
+
+.PHONY: install-flux
+install-flux: ## Install Flux source-controller into the current cluster.
+	@command -v $(FLUX) >/dev/null 2>&1 || { \
+		echo "Error: flux CLI not found. Install it from https://fluxcd.io/flux/installation/"; \
+		exit 1; \
+	}
+	$(FLUX) install --components=source-controller
+
+.PHONY: uninstall-flux
+uninstall-flux: ## Uninstall Flux from the current cluster.
+	$(FLUX) uninstall --silent
+
 ##@ Dependencies
 
 ## Location to install dependencies to
@@ -181,6 +195,7 @@ $(LOCALBIN):
 ## Tool Binaries
 KUBECTL ?= kubectl
 KIND ?= kind
+FLUX ?= flux
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
