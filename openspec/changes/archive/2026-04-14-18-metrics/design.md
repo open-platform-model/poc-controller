@@ -27,7 +27,6 @@ Controller-runtime uses the `prometheus/client_golang` library and exposes a met
 | `opm_controller_apply_resources_total` | Counter | `name`, `namespace`, `action` | Resources applied (created/updated/unchanged) |
 | `opm_controller_prune_resources_total` | Counter | `name`, `namespace` | Resources pruned |
 | `opm_controller_inventory_size` | Gauge | `name`, `namespace` | Current inventory entry count |
-| `opm_controller_failure_count` | Gauge | `name`, `namespace`, `phase` | Current failure counter value |
 
 ### 2. Metric prefix: opm_controller_
 
