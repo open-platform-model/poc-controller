@@ -13,6 +13,4 @@ spec:
     name: test-hello
   module:
     path: opmodel.dev/test/hello
-  values:
-    message: "deployed by opm controller"
   prune: true

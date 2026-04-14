@@ -148,12 +148,17 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 
 ##@ Local Workflow
 
+LOCAL_REGISTRY ?= opmodel.dev=opm-registry:5000+insecure,registry.cue.works
+
 .PHONY: apply-samples
 apply-samples: ## Apply sample OCIRepository and ModuleRelease CRs to the cluster.
 	$(KUBECTL) apply -f config/samples/source_v1_ocirepository.yaml -f config/samples/releases_v1alpha1_modulerelease.yaml
 
 .PHONY: local-run
 local-run: setup-test-e2e start-registry connect-registry install-flux publish-test-module kind-load deploy apply-samples ## Deploy controller to local Kind cluster (full setup).
+	$(KUBECTL) -n poc-controller-system patch deployment poc-controller-controller-manager \
+		--type=json \
+		-p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--registry=$(LOCAL_REGISTRY)"}]'
 
 .PHONY: local-clean
 local-clean: ## Tear down local Kind cluster and deployment.
@@ -230,7 +235,7 @@ install-flux: ## Install Flux source-controller into the current cluster.
 		echo "Error: flux CLI not found. Install it from https://fluxcd.io/flux/installation/"; \
 		exit 1; \
 	}
-	$(FLUX) install --components=source-controller
+	$(FLUX) install --components=source-controller --network-policy=false
 
 .PHONY: uninstall-flux
 uninstall-flux: ## Uninstall Flux from the current cluster.
