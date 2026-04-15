@@ -19,7 +19,6 @@ package reconcile_test
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,59 +107,6 @@ func getFirstFoundEnvTestBinaryDir() string {
 	return ""
 }
 
-// stubFetcher returns a fixed error on every Fetch call.
-type stubFetcher struct {
-	err error
-}
-
-func (f *stubFetcher) Fetch(_ context.Context, _, _, _ string) error {
-	if f.err != nil {
-		return f.err
-	}
-	return fmt.Errorf("stubFetcher: not implemented")
-}
-
-// copyDirFetcher copies a source directory into the fetch target.
-type copyDirFetcher struct {
-	sourceDir string
-}
-
-func (f *copyDirFetcher) Fetch(_ context.Context, _, _, dir string) error {
-	return copyDir(f.sourceDir, dir)
-}
-
-func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
-		}
-
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = in.Close() }()
-
-		out, err := os.Create(target)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = out.Close() }()
-
-		_, err = io.Copy(out, in)
-		return err
-	})
-}
-
 // testProvider builds a minimal provider that produces a ConfigMap.
 func testProvider() *provider.Provider {
 	cueCtx := cuecontext.New()
@@ -201,8 +147,4 @@ func testProvider() *provider.Provider {
 		},
 		Data: data,
 	}
-}
-
-func renderTestdataDir(name string) string {
-	return filepath.Join("..", "..", "..", "internal", "render", "testdata", name)
 }

@@ -87,18 +87,3 @@ func TestUpdateFailureCounters_NilCountersInitialized(t *testing.T) {
 	assert.Equal(t, int64(0), mrStatus.FailureCounters.Reconcile)
 	assert.Equal(t, int64(0), mrStatus.FailureCounters.Drift)
 }
-
-func TestUpdateFailureCounters_SoftBlockedNoReconcileChange(t *testing.T) {
-	mrStatus := &releasesv1alpha1.ModuleReleaseStatus{
-		FailureCounters: &releasesv1alpha1.FailureCounters{
-			Reconcile: 2,
-		},
-	}
-
-	// SoftBlocked doesn't increment or reset reconcile counter.
-	phases := phaseOutcomes{}
-
-	updateFailureCounters(mrStatus, SoftBlocked, phases)
-
-	assert.Equal(t, int64(2), mrStatus.FailureCounters.Reconcile, "SoftBlocked should not change reconcile counter")
-}

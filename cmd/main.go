@@ -41,7 +41,6 @@ import (
 	"github.com/open-platform-model/poc-controller/internal/catalog"
 	"github.com/open-platform-model/poc-controller/internal/controller"
 	_ "github.com/open-platform-model/poc-controller/internal/metrics"
-	"github.com/open-platform-model/poc-controller/internal/source"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -91,8 +90,9 @@ func main() {
 		"The directory containing the OPM catalog CUE composition module.")
 	flag.StringVar(&providerName, "provider-name", "kubernetes",
 		"The provider to load from the catalog registry.")
-	flag.StringVar(&registry, "registry", "opmodel.dev=ghcr.io/open-platform-model,registry.cue.works",
-		"CUE registry mapping for resolving catalog module dependencies.")
+	flag.StringVar(&registry, "registry", "",
+		"CUE registry mapping for resolving module dependencies. "+
+			"Falls back to OPM_REGISTRY env var. If neither is set, uses CUE default resolution.")
 	flag.StringVar(&cueCacheDir, "cue-cache-dir", "/tmp/cue-cache",
 		"Directory for CUE module download cache.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
@@ -197,18 +197,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Registry precedence: --registry flag > OPM_REGISTRY env > CUE default.
+	if registry == "" {
+		registry = os.Getenv("OPM_REGISTRY")
+	}
+
 	// Set CUE environment variables before any CUE loading.
 	// These must be set in main() before mgr.Start() spawns goroutines,
 	// because os.Setenv is not goroutine-safe.
-	for _, kv := range [][2]string{
-		{"CUE_REGISTRY", registry},
-		{"OPM_REGISTRY", registry},
-		{"CUE_CACHE_DIR", cueCacheDir},
-	} {
-		if err := os.Setenv(kv[0], kv[1]); err != nil {
-			setupLog.Error(err, "Failed to set environment variable", "key", kv[0])
-			os.Exit(1)
+	if registry != "" {
+		for _, key := range []string{"CUE_REGISTRY", "OPM_REGISTRY"} {
+			if err := os.Setenv(key, registry); err != nil {
+				setupLog.Error(err, "Failed to set environment variable", "key", key)
+				os.Exit(1)
+			}
 		}
+	}
+	if err := os.Setenv("CUE_CACHE_DIR", cueCacheDir); err != nil {
+		setupLog.Error(err, "Failed to set environment variable", "key", "CUE_CACHE_DIR")
+		os.Exit(1)
 	}
 
 	setupLog.Info("Loading OPM provider from catalog",
@@ -229,7 +236,6 @@ func main() {
 		RestConfig:      restConfig,
 		Provider:        opmProvider,
 		ResourceManager: resourceManager,
-		ArtifactFetcher: &source.ArtifactFetcher{},
 		EventRecorder:   mgr.GetEventRecorderFor("opm-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "ModuleRelease")

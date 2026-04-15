@@ -17,72 +17,12 @@ limitations under the License.
 package controller
 
 import (
-	"context"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 
 	"cuelang.org/go/cue/cuecontext"
 
 	"github.com/open-platform-model/poc-controller/pkg/provider"
 )
-
-// stubFetcher returns a fixed error on every Fetch call.
-// Use for tests that don't need a working artifact pipeline.
-type stubFetcher struct {
-	err error
-}
-
-func (f *stubFetcher) Fetch(_ context.Context, _, _, _ string) error {
-	if f.err != nil {
-		return f.err
-	}
-	return fmt.Errorf("stubFetcher: not implemented")
-}
-
-// copyDirFetcher copies a source directory into the fetch target.
-// Simulates a successful artifact fetch + extraction.
-type copyDirFetcher struct {
-	sourceDir string
-}
-
-func (f *copyDirFetcher) Fetch(_ context.Context, _, _, dir string) error {
-	return copyDir(f.sourceDir, dir)
-}
-
-// copyDir recursively copies src into dst.
-func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
-		}
-
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = in.Close() }()
-
-		out, err := os.Create(target)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = out.Close() }()
-
-		_, err = io.Copy(out, in)
-		return err
-	})
-}
 
 // testProvider builds a minimal provider for controller tests.
 // Produces a ConfigMap from each component's data.message field.
@@ -125,9 +65,4 @@ func testProvider() *provider.Provider {
 		},
 		Data: data,
 	}
-}
-
-// testModuleDir returns the path to the render testdata valid-module.
-func testModuleDir() string {
-	return filepath.Join("..", "render", "testdata", "valid-module")
 }

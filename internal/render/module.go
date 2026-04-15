@@ -3,12 +3,14 @@ package render
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 
 	releasesv1alpha1 "github.com/open-platform-model/poc-controller/api/v1alpha1"
 	"github.com/open-platform-model/poc-controller/internal/inventory"
+	"github.com/open-platform-model/poc-controller/internal/synthesis"
 	"github.com/open-platform-model/poc-controller/pkg/core"
 	"github.com/open-platform-model/poc-controller/pkg/loader"
 	"github.com/open-platform-model/poc-controller/pkg/module"
@@ -30,41 +32,53 @@ type RenderResult struct {
 	Warnings []string
 }
 
-// RenderModule is the single entry point for CUE module rendering in the controller.
-// It encapsulates the full CLI pipeline:
+// RenderModuleFromRegistry synthesizes a #ModuleRelease CUE package that
+// imports the target module from an OCI registry via CUE's native module
+// system. This is the primary render path for the controller.
 //
-//  1. Load the CUE module from the extracted artifact directory.
-//  2. Extract module metadata and #config schema.
-//  3. Convert RawValues (JSON) to a cue.Value.
-//  4. Inject #runtimeLabels with controller identity metadata.
-//  5. Build a release via module.ParseModuleRelease.
-//  6. Render via render.ProcessModuleRelease with the caller-supplied provider.
-//  7. Convert rendered resources to inventory entries.
-//
-// The provider is loaded from the controller-owned catalog at startup and passed
-// through the reconciler. RenderModule does not load or discover providers.
-// The values parameter may be nil if the module has no required config or has defaults.
-func RenderModule(
+// The flow:
+//  1. Synthesize a temporary CUE module with module.cue + release.cue.
+//  2. Load the package (CUE resolves dependencies from OCI registry).
+//  3. Extract module metadata and config schema from the loaded release.
+//  4. Inject values and #runtimeLabels.
+//  5. Build release via ParseModuleRelease → ProcessModuleRelease.
+//  6. Build inventory entries from rendered resources.
+func RenderModuleFromRegistry(
 	ctx context.Context,
-	moduleDir string,
+	name, namespace, modulePath, moduleVersion string,
 	values *releasesv1alpha1.RawValues,
 	prov *provider.Provider,
 ) (*RenderResult, error) {
+	// Synthesize the release CUE package.
+	dir, err := synthesis.SynthesizeRelease(synthesis.ReleaseParams{
+		Name:          name,
+		Namespace:     namespace,
+		ModulePath:    modulePath,
+		ModuleVersion: moduleVersion,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("synthesizing release: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
 	cueCtx := cuecontext.New()
 
-	// Load the CUE module package.
-	raw, err := loader.LoadModulePackage(cueCtx, moduleDir)
+	// Load the synthesized package. CUE resolves module dependencies from the
+	// OCI registry (respects CUE_REGISTRY env var set by the controller).
+	raw, err := loader.LoadModulePackage(cueCtx, dir)
 	if err != nil {
-		return nil, fmt.Errorf("loading module package: %w", err)
+		return nil, fmt.Errorf("loading synthesized release: %w", err)
 	}
 
-	// Extract module metadata and #config schema.
-	mod, err := extractModule(raw, moduleDir)
+	// Extract module info from the loaded release value.
+	mod, err := extractModuleFromRelease(raw, dir)
 	if err != nil {
-		return nil, fmt.Errorf("extracting module: %w", err)
+		return nil, fmt.Errorf("extracting module from release: %w", err)
 	}
 
 	// Convert CRD values to cue.Value slice.
+	// When no user values are provided, use the module's #config defaults
+	// so that values: _ in the #ModuleRelease schema becomes concrete.
 	var cueValues []cue.Value
 	if values != nil && values.Raw != nil {
 		compiled := cueCtx.CompileBytes(values.Raw, cue.Filename("values"))
@@ -72,10 +86,11 @@ func RenderModule(
 			return nil, fmt.Errorf("compiling values: %w", compiled.Err())
 		}
 		cueValues = append(cueValues, compiled)
+	} else if mod.Config.Exists() {
+		cueValues = append(cueValues, mod.Config)
 	}
 
-	// Inject #runtimeLabels before building the release. The definition is
-	// available to the CUE module's templates during evaluation.
+	// Inject #runtimeLabels.
 	runtimeLabels := cueCtx.CompileString(fmt.Sprintf(`{
 	%q: %q
 }`, core.LabelManagedBy, core.LabelManagedByControllerValue), cue.Filename("runtimeLabels"))
@@ -84,14 +99,13 @@ func RenderModule(
 	}
 	raw = raw.FillPath(cue.ParsePath("#runtimeLabels"), runtimeLabels)
 
-	// Build the release: validate values against #config, fill, ensure concrete.
+	// Build the release: validate values, fill, ensure concrete.
 	rel, err := module.ParseModuleRelease(ctx, raw, mod, cueValues)
 	if err != nil {
 		return nil, fmt.Errorf("parsing module release: %w", err)
 	}
 
-	// Render with the caller-supplied provider, overriding runtime labels
-	// so rendered resources carry controller identity instead of CLI identity.
+	// Render with the caller-supplied provider.
 	controllerLabels := map[string]string{
 		core.LabelManagedBy:              core.LabelManagedByControllerValue,
 		core.LabelModuleReleaseNamespace: rel.Metadata.Namespace,
@@ -102,10 +116,9 @@ func RenderModule(
 	}
 
 	if len(result.Resources) == 0 {
-		return nil, fmt.Errorf("module %q: no resources rendered", mod.Metadata.Name)
+		return nil, fmt.Errorf("module %q: no resources rendered", name)
 	}
 
-	// Convert resources to inventory entries.
 	entries, err := buildInventoryEntries(result.Resources)
 	if err != nil {
 		return nil, fmt.Errorf("building inventory entries: %w", err)
@@ -118,19 +131,28 @@ func RenderModule(
 	}, nil
 }
 
-// extractModule extracts the Module struct from a raw CUE value loaded from disk.
-func extractModule(raw cue.Value, moduleDir string) (module.Module, error) {
+// extractModuleFromRelease extracts module information from a loaded
+// #ModuleRelease CUE value. The module metadata and config are accessed
+// via the #module definition that was bound in the synthesized release.
+// Mirrors the CLI's approach in releasefile.bareModuleRelease.
+func extractModuleFromRelease(raw cue.Value, moduleDir string) (module.Module, error) {
+	// The synthesized release binds #module to the imported module package.
+	// Extract metadata from the release's top-level metadata (which includes
+	// module-level fields through #ModuleRelease schema unification).
 	metaVal := raw.LookupPath(cue.ParsePath("metadata"))
 	if !metaVal.Exists() {
-		return module.Module{}, fmt.Errorf("module missing metadata field")
+		return module.Module{}, fmt.Errorf("release missing metadata field")
 	}
 
 	meta := &module.ModuleMetadata{}
 	if err := metaVal.Decode(meta); err != nil {
-		return module.Module{}, fmt.Errorf("decoding module metadata: %w", err)
+		return module.Module{}, fmt.Errorf("decoding module metadata from release: %w", err)
 	}
 
-	config := raw.LookupPath(cue.ParsePath("#config"))
+	// Extract #module and #config from the release, matching the CLI's
+	// two-step lookup (LookupPath for #module, then #config on the result).
+	moduleVal := raw.LookupPath(cue.MakePath(cue.Def("module")))
+	config := moduleVal.LookupPath(cue.MakePath(cue.Def("config")))
 
 	return module.Module{
 		Metadata:   meta,

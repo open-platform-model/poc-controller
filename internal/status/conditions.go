@@ -8,20 +8,17 @@ import (
 // Condition types.
 // Ready, Reconciling, and Stalled are reexported from Flux meta for consistency.
 const (
-	ReadyCondition       = meta.ReadyCondition       // "Ready"
-	ReconcilingCondition = meta.ReconcilingCondition // "Reconciling"
-	StalledCondition     = meta.StalledCondition     // "Stalled"
-	SourceReadyCondition = "SourceReady"
-	DriftedCondition     = "Drifted"
+	ReadyCondition          = meta.ReadyCondition       // "Ready"
+	ReconcilingCondition    = meta.ReconcilingCondition // "Reconciling"
+	StalledCondition        = meta.StalledCondition     // "Stalled"
+	ModuleResolvedCondition = "ModuleResolved"
+	DriftedCondition        = "Drifted"
 )
 
 // Condition reasons.
 const (
 	SuspendedReason               = "Suspended"
-	SourceNotReadyReason          = "SourceNotReady"
-	SourceUnavailableReason       = "SourceUnavailable"
-	ArtifactFetchFailedReason     = "ArtifactFetchFailed"
-	ArtifactInvalidReason         = "ArtifactInvalid"
+	ResolutionFailedReason        = "ResolutionFailed"
 	RenderFailedReason            = "RenderFailed"
 	ApplyFailedReason             = "ApplyFailed"
 	PruneFailedReason             = "PruneFailed"
@@ -79,12 +76,8 @@ func ClearDrifted(obj conditions.Setter) {
 	conditions.Delete(obj, DriftedCondition)
 }
 
-// MarkSourceReady sets SourceReady=True with the artifact revision as message.
-func MarkSourceReady(obj conditions.Setter, revision string) {
-	conditions.MarkTrue(obj, SourceReadyCondition, "ArtifactAvailable", "artifact revision %s", revision)
-}
-
-// MarkSourceNotReady sets SourceReady=False with the given reason and message.
-func MarkSourceNotReady(obj conditions.Setter, reason, messageFormat string, messageArgs ...any) {
-	conditions.MarkFalse(obj, SourceReadyCondition, reason, messageFormat, messageArgs...)
+// MarkModuleResolved sets ModuleResolved=True indicating the CUE module was
+// successfully resolved from the OCI registry.
+func MarkModuleResolved(obj conditions.Setter, moduleRef string) {
+	conditions.MarkTrue(obj, ModuleResolvedCondition, "ModuleResolved", "module resolved: %s", moduleRef)
 }

@@ -92,51 +92,42 @@ func TestMarkSuspended(t *testing.T) {
 
 func TestMarkNotReady(t *testing.T) {
 	obj := newModuleRelease()
-	MarkNotReady(obj, ArtifactFetchFailedReason, "fetch failed: timeout")
+	MarkNotReady(obj, RenderFailedReason, "render failed: invalid values")
 
 	assert.True(t, conditions.IsFalse(obj, ReadyCondition))
-	assert.Equal(t, ArtifactFetchFailedReason, conditions.GetReason(obj, ReadyCondition))
-	assert.Equal(t, "fetch failed: timeout", conditions.GetMessage(obj, ReadyCondition))
+	assert.Equal(t, RenderFailedReason, conditions.GetReason(obj, ReadyCondition))
+	assert.Equal(t, "render failed: invalid values", conditions.GetMessage(obj, ReadyCondition))
 }
 
-func TestMarkSourceReady(t *testing.T) {
+func TestMarkModuleResolved(t *testing.T) {
 	obj := newModuleRelease()
-	MarkSourceReady(obj, "sha256:abc123")
+	MarkModuleResolved(obj, "opmodel.dev/modules/hello@v0@v0.1.0")
 
-	assert.True(t, conditions.IsTrue(obj, SourceReadyCondition))
-	assert.Contains(t, conditions.GetMessage(obj, SourceReadyCondition), "sha256:abc123")
+	assert.True(t, conditions.IsTrue(obj, ModuleResolvedCondition))
+	assert.Contains(t, conditions.GetMessage(obj, ModuleResolvedCondition), "opmodel.dev/modules/hello@v0@v0.1.0")
 }
 
-func TestMarkSourceNotReady(t *testing.T) {
+func TestMarkModuleResolved_Overwrite(t *testing.T) {
 	obj := newModuleRelease()
-	MarkSourceNotReady(obj, SourceUnavailableReason, "source not found")
+	// Manually set a False condition to verify overwrite.
+	conditions.MarkFalse(obj, ModuleResolvedCondition, "Failed", "initial failure")
+	assert.True(t, conditions.IsFalse(obj, ModuleResolvedCondition))
 
-	assert.True(t, conditions.IsFalse(obj, SourceReadyCondition))
-	assert.Equal(t, SourceUnavailableReason, conditions.GetReason(obj, SourceReadyCondition))
-}
-
-func TestMarkSourceReady_OverwritesNotReady(t *testing.T) {
-	obj := newModuleRelease()
-	MarkSourceNotReady(obj, SourceNotReadyReason, "pending")
-	MarkSourceReady(obj, "sha256:def456")
-
-	assert.True(t, conditions.IsTrue(obj, SourceReadyCondition))
+	MarkModuleResolved(obj, "opmodel.dev/test@v0@v0.2.0")
+	assert.True(t, conditions.IsTrue(obj, ModuleResolvedCondition))
 }
 
 func TestConditionConstants(t *testing.T) {
 	assert.Equal(t, "Ready", ReadyCondition)
 	assert.Equal(t, "Reconciling", ReconcilingCondition)
 	assert.Equal(t, "Stalled", StalledCondition)
-	assert.Equal(t, "SourceReady", SourceReadyCondition)
+	assert.Equal(t, "ModuleResolved", ModuleResolvedCondition)
 }
 
 func TestReasonConstants(t *testing.T) {
 	reasons := []string{
 		SuspendedReason,
-		SourceNotReadyReason,
-		SourceUnavailableReason,
-		ArtifactFetchFailedReason,
-		ArtifactInvalidReason,
+		ResolutionFailedReason,
 		RenderFailedReason,
 		ApplyFailedReason,
 		PruneFailedReason,

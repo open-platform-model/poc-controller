@@ -53,13 +53,9 @@ var _ = Describe("ModuleRelease Controller", func() {
 						Namespace: "default",
 					},
 					Spec: releasesv1alpha1.ModuleReleaseSpec{
-						SourceRef: releasesv1alpha1.SourceReference{
-							APIVersion: "source.toolkit.fluxcd.io/v1",
-							Kind:       "OCIRepository",
-							Name:       "test-source",
-						},
 						Module: releasesv1alpha1.ModuleReference{
-							Path: "opmodel.dev/test/module",
+							Path:    "opmodel.dev/test/module",
+							Version: "v0.1.0",
 						},
 					},
 				}

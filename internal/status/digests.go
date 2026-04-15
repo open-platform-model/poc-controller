@@ -34,10 +34,12 @@ type DigestSet struct {
 	Inventory string
 }
 
-// SourceDigest returns the source digest as-is from the Flux artifact.
-// This is a passthrough — Flux already computed the digest.
-func SourceDigest(artifactDigest string) string {
-	return artifactDigest
+// ModuleSourceDigest computes a deterministic source digest from a CUE module
+// path and version. Replaces SourceDigest for the CUE-native module resolution
+// path where there is no Flux artifact digest.
+func ModuleSourceDigest(modulePath, moduleVersion string) string {
+	sum := sha256.Sum256([]byte(modulePath + "@" + moduleVersion))
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 // ConfigDigest computes a deterministic SHA-256 digest of the release values.

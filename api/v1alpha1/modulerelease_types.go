@@ -28,10 +28,7 @@ type ModuleReleaseSpec struct {
 	// +optional
 	Suspend bool `json:"suspend,omitempty"`
 
-	// SourceRef points to the Flux source object that provides the artifact.
-	SourceRef SourceReference `json:"sourceRef"`
-
-	// Module selects the module to evaluate from the source artifact.
+	// Module identifies the CUE module to evaluate from the OCI registry.
 	Module ModuleReference `json:"module"`
 
 	// Values contains arbitrary release input values.
@@ -66,9 +63,6 @@ type ModuleReleaseStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// +optional
-	Source *SourceStatus `json:"source,omitempty"`
 
 	// +optional
 	LastAttemptedAction string `json:"lastAttemptedAction,omitempty"`
@@ -114,7 +108,8 @@ type ModuleReleaseStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=mr
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
-// +kubebuilder:printcolumn:name="Source",type=string,JSONPath=".status.source.artifactRevision"
+// +kubebuilder:printcolumn:name="Module",type=string,JSONPath=".spec.module.path"
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.module.version"
 
 // ModuleRelease is the Schema for the modulereleases API
 type ModuleRelease struct {

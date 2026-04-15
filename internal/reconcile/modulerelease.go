@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"strings"
 	"time"
 
 	fluxssa "github.com/fluxcd/pkg/ssa"
@@ -27,7 +27,6 @@ import (
 	"github.com/open-platform-model/poc-controller/internal/inventory"
 	opmmetrics "github.com/open-platform-model/poc-controller/internal/metrics"
 	"github.com/open-platform-model/poc-controller/internal/render"
-	"github.com/open-platform-model/poc-controller/internal/source"
 	"github.com/open-platform-model/poc-controller/internal/status"
 	"github.com/open-platform-model/poc-controller/pkg/core"
 	"github.com/open-platform-model/poc-controller/pkg/provider"
@@ -37,9 +36,6 @@ const (
 	// FinalizerName is the finalizer registered on ModuleRelease resources
 	// to ensure owned resources are cleaned up before deletion completes.
 	FinalizerName = "releases.opmodel.dev/cleanup"
-
-	// softBlockedRequeue is the requeue delay for SoftBlocked outcomes.
-	softBlockedRequeue = 30 * time.Second
 )
 
 // ModuleReleaseParams holds the dependencies injected into the reconcile loop.
@@ -48,7 +44,6 @@ type ModuleReleaseParams struct {
 	RestConfig      *rest.Config
 	Provider        *provider.Provider
 	ResourceManager *fluxssa.ResourceManager
-	ArtifactFetcher source.Fetcher
 	EventRecorder   record.EventRecorder
 }
 
@@ -104,7 +99,7 @@ func ReconcileModuleRelease(
 					status.ReadyCondition,
 					status.ReconcilingCondition,
 					status.StalledCondition,
-					status.SourceReadyCondition,
+					status.ModuleResolvedCondition,
 					status.DriftedCondition,
 				},
 			},
@@ -134,8 +129,18 @@ func ReconcileModuleRelease(
 		phases phaseOutcomes
 	)
 
-	// Deferred status commit — always patches status regardless of outcome.
+	// Deferred status commit — patches status only when meaningful state changed.
+	// Skipping redundant patches avoids bumping resourceVersion, which would
+	// trigger another watch event and create a reconcile storm.
 	defer func() {
+		// Skip redundant status patches to avoid bumping resourceVersion
+		// and triggering watch-driven reconcile storms.
+		if shouldSkipStatusPatch(outcome, reconciled, errMsg, digests, mr.Status) {
+			recordReconcileMetrics(mr.Name, mr.Namespace, outcome, time.Since(reconcileStart), false, 0)
+			opmmetrics.RecordDuration(mr.Name, mr.Namespace, time.Since(reconcileStart))
+			return
+		}
+
 		now := metav1.Now()
 		mr.Status.ObservedGeneration = mr.Generation
 		mr.Status.LastAttemptedAction = "reconcile"
@@ -185,7 +190,7 @@ func ReconcileModuleRelease(
 					status.ReadyCondition,
 					status.ReconcilingCondition,
 					status.StalledCondition,
-					status.SourceReadyCondition,
+					status.ModuleResolvedCondition,
 					status.DriftedCondition,
 				},
 			},
@@ -198,61 +203,33 @@ func ReconcileModuleRelease(
 	// Mark reconciling at the start.
 	status.MarkReconciling(&mr, "Progressing", "Reconciliation in progress")
 
-	// Phase 1: Resolve source.
-	artifactRef, err := source.Resolve(ctx, params.Client, mr.Spec.SourceRef, mr.Namespace)
-	if err != nil {
-		return sourceError(&mr, err, &outcome, &errMsg, params.EventRecorder)
-	}
-
-	status.MarkSourceReady(&mr, artifactRef.Revision)
-	mr.Status.Source = &releasesv1alpha1.SourceStatus{
-		Ref:              &mr.Spec.SourceRef,
-		ArtifactRevision: artifactRef.Revision,
-		ArtifactDigest:   artifactRef.Digest,
-		ArtifactURL:      artifactRef.URL,
-	}
-
 	// Compute source and config digests early for no-op detection.
-	digests.Source = status.SourceDigest(artifactRef.Digest)
+	// Source digest is derived from the module path + version (replaces Flux artifact digest).
+	digests.Source = status.ModuleSourceDigest(mr.Spec.Module.Path, mr.Spec.Module.Version)
 	digests.Config = status.ConfigDigest(mr.Spec.Values)
 
-	// Phase 2: Fetch and unpack artifact.
-	dir, err := os.MkdirTemp("", "opm-artifact-*")
+	// Phase 1: Synthesize, resolve, and render module from OCI registry.
+	// CUE's native module system resolves the target module from the registry.
+	renderResult, err := render.RenderModuleFromRegistry(
+		ctx,
+		mr.Name, mr.Namespace,
+		mr.Spec.Module.Path, mr.Spec.Module.Version,
+		mr.Spec.Values,
+		params.Provider,
+	)
 	if err != nil {
-		status.MarkNotReady(&mr, status.ArtifactFetchFailedReason, "creating temp dir: %s", err)
-		outcome = FailedTransient
-		errMsg = fmt.Sprintf("creating temp dir: %s", err)
-		return ctrl.Result{}, err
-	}
-	defer func() {
-		if removeErr := os.RemoveAll(dir); removeErr != nil {
-			logf.FromContext(ctx).Error(removeErr, "Failed to remove temp dir", "dir", dir)
+		reason := status.RenderFailedReason
+		if isResolutionError(err) {
+			reason = status.ResolutionFailedReason
 		}
-	}()
-
-	if err := params.ArtifactFetcher.Fetch(ctx, artifactRef.URL, artifactRef.Digest, dir); err != nil {
-		params.EventRecorder.Eventf(&mr, corev1.EventTypeWarning, status.ArtifactFetchFailedReason, "%s", err)
-		if errors.Is(err, source.ErrMissingCUEModule) {
-			status.MarkStalled(&mr, status.ArtifactInvalidReason, "%s", err)
-			outcome = FailedStalled
-			errMsg = err.Error()
-			return ctrl.Result{}, nil
-		}
-		status.MarkNotReady(&mr, status.ArtifactFetchFailedReason, "%s", err)
-		outcome = FailedTransient
-		errMsg = err.Error()
-		return ctrl.Result{}, err
-	}
-
-	// Phase 3: Render module, compute digests.
-	renderResult, err := render.RenderModule(ctx, dir, mr.Spec.Values, params.Provider)
-	if err != nil {
-		params.EventRecorder.Eventf(&mr, corev1.EventTypeWarning, status.RenderFailedReason, "%s", err)
-		status.MarkStalled(&mr, status.RenderFailedReason, "%s", err)
+		params.EventRecorder.Eventf(&mr, corev1.EventTypeWarning, reason, "%s", err)
+		status.MarkStalled(&mr, reason, "%s", err)
 		outcome = FailedStalled
 		errMsg = err.Error()
 		return ctrl.Result{}, nil
 	}
+
+	status.MarkModuleResolved(&mr, fmt.Sprintf("%s@%s", mr.Spec.Module.Path, mr.Spec.Module.Version))
 
 	renderDigest, err := status.RenderDigest(renderResult.Resources)
 	if err != nil {
@@ -291,8 +268,6 @@ func ReconcileModuleRelease(
 
 	if isNoOp {
 		log.Info("No changes detected, skipping apply")
-		status.MarkReady(&mr, "No changes detected")
-		params.EventRecorder.Event(&mr, corev1.EventTypeNormal, status.NoOpReason, "No changes detected")
 		outcome = NoOp
 		return ctrl.Result{}, nil
 	}
@@ -450,6 +425,30 @@ func detectDrift(
 	return false
 }
 
+// shouldSkipStatusPatch returns true when a status patch would be redundant —
+// either nothing changed (NoOp) or the failure was already recorded with the
+// same digests. Skipping avoids bumping resourceVersion and triggering
+// watch-driven reconcile storms.
+func shouldSkipStatusPatch(
+	outcome Outcome,
+	reconciled bool,
+	errMsg string,
+	digests status.DigestSet,
+	currentStatus releasesv1alpha1.ModuleReleaseStatus,
+) bool {
+	// NoOp: nothing changed — preserve existing status as-is.
+	if outcome == NoOp {
+		return true
+	}
+	// Failed retry with identical digests: status already reflects this failure.
+	if !reconciled && errMsg != "" &&
+		digests.Source == currentStatus.LastAttemptedSourceDigest &&
+		digests.Config == currentStatus.LastAttemptedConfigDigest {
+		return true
+	}
+	return false
+}
+
 // inventoryDigest returns the digest from the inventory, or empty string if nil.
 func inventoryDigest(inv *releasesv1alpha1.Inventory) string {
 	if inv == nil {
@@ -546,33 +545,13 @@ func pruneStaleResources(
 	return AppliedAndPruned, true, pruneResult.Deleted, nil
 }
 
-// sourceError classifies a source resolution error, sets conditions, emits
-// events, and writes the outcome and error message into the caller's deferred-captured variables.
-func sourceError(
-	mr *releasesv1alpha1.ModuleRelease,
-	err error,
-	outcome *Outcome,
-	errMsg *string,
-	recorder record.EventRecorder,
-) (ctrl.Result, error) {
-	*errMsg = err.Error()
-	if errors.Is(err, source.ErrSourceNotReady) {
-		recorder.Eventf(mr, corev1.EventTypeWarning, status.SourceNotReadyReason, "%s", err)
-		status.MarkSourceNotReady(mr, status.SourceNotReadyReason, "%s", err)
-		*outcome = SoftBlocked
-		return ctrl.Result{RequeueAfter: softBlockedRequeue}, nil
-	}
-	if errors.Is(err, source.ErrSourceNotFound) {
-		status.MarkSourceNotReady(mr, status.SourceUnavailableReason, "%s", err)
-		status.MarkStalled(mr, status.SourceUnavailableReason, "%s", err)
-		*outcome = FailedStalled
-		return ctrl.Result{}, nil
-	}
-	// Transient error (e.g., API server unreachable).
-	status.MarkSourceNotReady(mr, status.SourceUnavailableReason, "%s", err)
-	status.MarkNotReady(mr, status.SourceUnavailableReason, "%s", err)
-	*outcome = FailedTransient
-	return ctrl.Result{}, err
+// isResolutionError returns true if the error indicates a module resolution
+// failure (CUE couldn't resolve the module from the OCI registry), as opposed
+// to a render/evaluation error.
+func isResolutionError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "loading synthesized release") ||
+		strings.Contains(msg, "synthesizing release")
 }
 
 // isForbidden returns true if the error chain contains a Kubernetes Forbidden (403) status error.
