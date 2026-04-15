@@ -65,6 +65,7 @@ dependencies from a registry. The Flux source layer is redundant for CUE modules
 ## Scope Boundary
 
 **In scope:**
+
 - CR schema change (remove sourceRef, update module)
 - Release package synthesis
 - Registry configuration (flag + env var)
@@ -74,6 +75,7 @@ dependencies from a registry. The Flux source layer is redundant for CUE modules
 - Update e2e tests and samples
 
 **Out of scope:**
+
 - Private registry authentication (future)
 - Semver range resolution / auto-upgrade (future)
 - Removing `internal/source/` package (retained for future use)

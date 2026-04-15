@@ -229,16 +229,19 @@ path and version instead of Flux artifact metadata.
 ### Internal Package Changes
 
 **New**: `internal/synthesis/` (or extend `internal/render/`)
+
 - `SynthesizeRelease(name, namespace, modulePath, moduleVersion, catalogVersion string) (string, error)`
   Returns path to temp directory containing the synthesized CUE module.
 
 **Modified**: `internal/render/module.go`
+
 - `RenderModule` signature changes: accepts module path + version instead of
   directory path. Internally calls synthesis, then loads and evaluates.
 - Or: a new function `RenderModuleFromRegistry` wraps synthesis + existing
   `RenderModule`.
 
 **Modified**: `internal/reconcile/modulerelease.go`
+
 - Source-fetching logic replaced with synthesis call.
 - OCIRepository watch removed.
 - Registry config passed through reconciler params.
