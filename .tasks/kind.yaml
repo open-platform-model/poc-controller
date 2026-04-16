@@ -22,16 +22,6 @@ tasks:
     cmds:
       - '{{.KIND}} load docker-image {{.IMG}} --name {{.KIND_CLUSTER}}'
 
-  e2e:
-    desc: Run e2e tests against a Kind cluster
-    deps: [setup, ":dev:manifests", ":dev:generate", ":dev:fmt", ":dev:vet"]
-    env:
-      KIND: '{{.KIND}}'
-      KIND_CLUSTER: '{{.KIND_CLUSTER}}'
-    cmds:
-      - defer: '{{.KIND}} delete cluster --name {{.KIND_CLUSTER}}'
-      - go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-
   bootstrap:
     desc: Deploy controller to local Kind cluster (full setup)
     cmds:
@@ -46,7 +36,7 @@ tasks:
       - |
         {{.KUBECTL}} -n poc-controller-system patch deployment poc-controller-controller-manager \
           --type=json \
-          -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--registry={{.LOCAL_REGISTRY}}"}]'
+          -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--registry={{.KIND_CUE_REGISTRY}}"}]'
 
   teardown:
     desc: Tear down local Kind deployment
