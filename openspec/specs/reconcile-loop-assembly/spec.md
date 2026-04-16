@@ -34,22 +34,26 @@ The reconciler MUST detect no-op reconciliations and skip apply/prune when nothi
 - **THEN** the controller skips apply and prune, keeps `Ready=True`, and does not record a new history entry
 
 ### Requirement: Outcome classification
-The reconciler MUST classify each reconcile attempt as one of: `SoftBlocked`, `NoOp`, `Applied`, `AppliedAndPruned`, `FailedTransient`, `FailedStalled`.
+The reconciler MUST classify each reconcile attempt as one of: `NoOp`, `Applied`, `AppliedAndPruned`, `FailedTransient`, `FailedStalled`.
 
-#### Scenario: Transient failure requeues
+#### Scenario: Transient failure requeues with explicit backoff
 - **WHEN** the outcome is `FailedTransient`
-- **THEN** the controller requeues with exponential backoff
+- **THEN** the controller returns `ctrl.Result{RequeueAfter: backoff}` with nil error, where backoff is computed from `failureCounters.reconcile`
 
-#### Scenario: Stalled failure waits
+#### Scenario: Stalled failure requeues with safety interval
 - **WHEN** the outcome is `FailedStalled`
-- **THEN** the controller sets `Stalled=True` and does NOT requeue (waits for spec or source change)
+- **THEN** the controller returns `ctrl.Result{RequeueAfter: 30m}` with nil error
 
 ### Requirement: Status always patched
-The reconciler MUST patch `ModuleRelease.status` at the end of every reconcile attempt, regardless of outcome.
+The reconciler MUST patch `ModuleRelease.status` at the end of every reconcile attempt that produces a meaningful state change. The reconciler MUST NOT patch status when the outcome is `NoOp` and no state has changed.
 
 #### Scenario: Status updated on failure
 - **WHEN** a phase fails
-- **THEN** status conditions and `lastAttempted*` fields are still updated
+- **THEN** status conditions, `lastAttempted*` fields, and `nextRetryAt` are updated
+
+#### Scenario: Status skip on no-op
+- **WHEN** the outcome is `NoOp`
+- **THEN** no status patch is issued (generation predicate prevents the resulting watch event from mattering, and skipping the patch avoids unnecessary API calls)
 
 ### Requirement: Inventory updated only on full success
 The `status.inventory` MUST only be replaced after a fully successful apply (and prune, if enabled).

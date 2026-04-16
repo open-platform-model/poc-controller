@@ -17,6 +17,8 @@ limitations under the License.
 package reconcile_test
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -181,7 +183,7 @@ var _ = Describe("ServiceAccount Impersonation", func() {
 				NamespacedName: nn,
 			})
 			Expect(err).NotTo(HaveOccurred(), "stalled errors return nil")
-			Expect(result.RequeueAfter).To(BeZero(), "stalled does not requeue")
+			Expect(result.RequeueAfter).To(Equal(30*time.Minute), "stalled requeues with safety interval")
 
 			var updated releasesv1alpha1.ModuleRelease
 			Expect(k8sClient.Get(ctx, nn, &updated)).To(Succeed())
@@ -292,7 +294,7 @@ var _ = Describe("ServiceAccount Impersonation", func() {
 				NamespacedName: nn,
 			})
 			Expect(reconcileErr).NotTo(HaveOccurred(), "stalled errors return nil")
-			Expect(result.RequeueAfter).To(BeZero(), "stalled does not requeue")
+			Expect(result.RequeueAfter).To(Equal(30*time.Minute), "stalled requeues with safety interval")
 
 			var updated releasesv1alpha1.ModuleRelease
 			Expect(k8sClient.Get(ctx, nn, &updated)).To(Succeed())

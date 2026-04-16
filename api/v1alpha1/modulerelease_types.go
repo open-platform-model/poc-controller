@@ -102,6 +102,11 @@ type ModuleReleaseStatus struct {
 
 	// +optional
 	History []HistoryEntry `json:"history,omitempty"`
+
+	// NextRetryAt indicates when the controller will next attempt reconciliation
+	// after a transient or stalled failure. Nil when the resource is healthy or no-op.
+	// +optional
+	NextRetryAt *metav1.Time `json:"nextRetryAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -110,6 +115,7 @@ type ModuleReleaseStatus struct {
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Module",type=string,JSONPath=".spec.module.path"
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.module.version"
+// +kubebuilder:printcolumn:name="Retry",type=date,JSONPath=".status.nextRetryAt",priority=1
 
 // ModuleRelease is the Schema for the modulereleases API
 type ModuleRelease struct {

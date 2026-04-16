@@ -26,6 +26,10 @@ spec:
     - jsonPath: .spec.module.version
       name: Version
       type: string
+    - jsonPath: .status.nextRetryAt
+      name: Retry
+      priority: 1
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -272,6 +276,12 @@ spec:
               lastAttemptedRenderDigest:
                 type: string
               lastAttemptedSourceDigest:
+                type: string
+              nextRetryAt:
+                description: |-
+                  NextRetryAt indicates when the controller will next attempt reconciliation
+                  after a transient or stalled failure. Nil when the resource is healthy or no-op.
+                format: date-time
                 type: string
               observedGeneration:
                 format: int64

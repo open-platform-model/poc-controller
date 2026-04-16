@@ -124,18 +124,36 @@ func ReconcileModuleRelease(
 		reconciled bool // true if apply (and optional prune) succeeded
 		newEntries []releasesv1alpha1.InventoryEntry
 		errMsg     string
+		retryAfter time.Duration // explicit backoff for failed outcomes
 
 		// Phase outcome tracking for failure counters (updated in Phase 7).
 		phases phaseOutcomes
 	)
 
-	// Deferred status commit — patches status only when meaningful state changed.
-	// Skipping redundant patches avoids bumping resourceVersion, which would
-	// trigger another watch event and create a reconcile storm.
+	// Deferred status commit — always patches status when meaningful state changed.
+	// The GenerationChangedPredicate on the controller's event filter prevents
+	// status-only patches from triggering watch-driven reconcile storms.
 	defer func() {
-		// Skip redundant status patches to avoid bumping resourceVersion
-		// and triggering watch-driven reconcile storms.
-		if shouldSkipStatusPatch(outcome, reconciled, errMsg, digests, mr.Status) {
+		if outcome == NoOp {
+			// Clear NextRetryAt if it was set by a previous failed reconcile,
+			// then patch to reflect the healthy state.
+			if mr.Status.NextRetryAt != nil {
+				mr.Status.NextRetryAt = nil
+				if patchErr := patcher.Patch(ctx, &mr,
+					patch.WithOwnedConditions{
+						Conditions: []string{
+							status.ReadyCondition,
+							status.ReconcilingCondition,
+							status.StalledCondition,
+							status.ModuleResolvedCondition,
+							status.DriftedCondition,
+						},
+					},
+					patch.WithStatusObservedGeneration{},
+				); patchErr != nil {
+					log.Error(patchErr, "Failed to clear NextRetryAt on NoOp")
+				}
+			}
 			recordReconcileMetrics(mr.Name, mr.Namespace, outcome, time.Since(reconcileStart), false, 0)
 			opmmetrics.RecordDuration(mr.Name, mr.Namespace, time.Since(reconcileStart))
 			return
@@ -180,6 +198,14 @@ func ReconcileModuleRelease(
 
 		// Update failure counters based on phase outcomes.
 		updateFailureCounters(&mr.Status, outcome, phases)
+
+		// Set or clear NextRetryAt based on outcome.
+		if retryAfter > 0 {
+			retryTime := metav1.NewTime(time.Now().Add(retryAfter))
+			mr.Status.NextRetryAt = &retryTime
+		} else {
+			mr.Status.NextRetryAt = nil
+		}
 
 		// Record reconcile metrics.
 		recordReconcileMetrics(mr.Name, mr.Namespace, outcome, time.Since(reconcileStart), reconciled, len(newEntries))
@@ -226,7 +252,8 @@ func ReconcileModuleRelease(
 		status.MarkStalled(&mr, reason, "%s", err)
 		outcome = FailedStalled
 		errMsg = err.Error()
-		return ctrl.Result{}, nil
+		retryAfter = StalledRecheckInterval
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	status.MarkModuleResolved(&mr, fmt.Sprintf("%s@%s", mr.Spec.Module.Path, mr.Spec.Module.Version))
@@ -236,7 +263,8 @@ func ReconcileModuleRelease(
 		status.MarkStalled(&mr, status.RenderFailedReason, "computing render digest: %s", err)
 		outcome = FailedStalled
 		errMsg = fmt.Sprintf("computing render digest: %s", err)
-		return ctrl.Result{}, nil
+		retryAfter = StalledRecheckInterval
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 	digests.Render = renderDigest
 	digests.Inventory = inventory.ComputeDigest(renderResult.InventoryEntries)
@@ -249,7 +277,8 @@ func ReconcileModuleRelease(
 		status.MarkStalled(&mr, status.ApplyFailedReason, "converting resources: %s", err)
 		outcome = FailedStalled
 		errMsg = fmt.Sprintf("converting resources: %s", err)
-		return ctrl.Result{}, nil
+		retryAfter = StalledRecheckInterval
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	lastApplied := status.DigestSet{
@@ -285,7 +314,8 @@ func ReconcileModuleRelease(
 		status.MarkStalled(&mr, status.ImpersonationFailedReason, "%s", impErr)
 		outcome = FailedStalled
 		errMsg = impErr.Error()
-		return ctrl.Result{}, nil
+		retryAfter = StalledRecheckInterval
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	// Phase 5: Apply resources.
@@ -299,12 +329,14 @@ func ReconcileModuleRelease(
 			status.MarkStalled(&mr, status.ImpersonationFailedReason, "%s", err)
 			outcome = FailedStalled
 			errMsg = err.Error()
-			return ctrl.Result{}, nil
+			retryAfter = StalledRecheckInterval
+			return ctrl.Result{RequeueAfter: retryAfter}, nil
 		}
 		status.MarkNotReady(&mr, status.ApplyFailedReason, "%s", err)
 		outcome = FailedTransient
 		errMsg = err.Error()
-		return ctrl.Result{}, err
+		retryAfter = ComputeBackoff(reconcileFailureCount(mr.Status.FailureCounters) + 1)
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	total := applyResult.Created + applyResult.Updated + applyResult.Unchanged
@@ -330,10 +362,13 @@ func ReconcileModuleRelease(
 	if err != nil {
 		phases.pruneFailed = true
 		errMsg = err.Error()
-		return ctrl.Result{}, err
+		retryAfter = ComputeBackoff(reconcileFailureCount(mr.Status.FailureCounters) + 1)
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 	if !reconciled {
 		phases.pruneFailed = true
+		retryAfter = StalledRecheckInterval
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	// Record prune metrics.
@@ -425,28 +460,12 @@ func detectDrift(
 	return false
 }
 
-// shouldSkipStatusPatch returns true when a status patch would be redundant —
-// either nothing changed (NoOp) or the failure was already recorded with the
-// same digests. Skipping avoids bumping resourceVersion and triggering
-// watch-driven reconcile storms.
-func shouldSkipStatusPatch(
-	outcome Outcome,
-	reconciled bool,
-	errMsg string,
-	digests status.DigestSet,
-	currentStatus releasesv1alpha1.ModuleReleaseStatus,
-) bool {
-	// NoOp: nothing changed — preserve existing status as-is.
-	if outcome == NoOp {
-		return true
+// reconcileFailureCount returns the current reconcile failure count, or 0 if counters are nil.
+func reconcileFailureCount(counters *releasesv1alpha1.FailureCounters) int64 {
+	if counters == nil {
+		return 0
 	}
-	// Failed retry with identical digests: status already reflects this failure.
-	if !reconciled && errMsg != "" &&
-		digests.Source == currentStatus.LastAttemptedSourceDigest &&
-		digests.Config == currentStatus.LastAttemptedConfigDigest {
-		return true
-	}
-	return false
+	return counters.Reconcile
 }
 
 // inventoryDigest returns the digest from the inventory, or empty string if nil.

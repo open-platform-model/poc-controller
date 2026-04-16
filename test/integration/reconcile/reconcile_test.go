@@ -91,7 +91,7 @@ var _ = Describe("Reconcile Error Paths", func() {
 				},
 			})
 			Expect(err).NotTo(HaveOccurred(), "stalled errors return nil")
-			Expect(result.RequeueAfter).To(BeZero(), "stalled does not requeue")
+			Expect(result.RequeueAfter).To(Equal(30*time.Minute), "stalled requeues with safety interval")
 
 			var mr releasesv1alpha1.ModuleRelease
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
@@ -149,7 +149,7 @@ var _ = Describe("Reconcile Error Paths", func() {
 				NamespacedName: nn,
 			})
 			Expect(err).NotTo(HaveOccurred(), "stalled returns nil error")
-			Expect(result.RequeueAfter).To(BeZero(), "stalled does not requeue")
+			Expect(result.RequeueAfter).To(Equal(30*time.Minute), "stalled requeues with safety interval")
 
 			var updated releasesv1alpha1.ModuleRelease
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
@@ -210,6 +210,42 @@ var _ = Describe("Reconcile Error Paths", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: "status-fail-mr", Namespace: namespace},
 			})).To(Succeed())
 		})
+	})
+
+	Context("nextRetryAt status field", func() {
+		It("should set nextRetryAt on stalled failure", func() {
+			mr := &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "retry-stalled-mr",
+					Namespace: namespace,
+				},
+				Spec: releasesv1alpha1.ModuleReleaseSpec{
+					Module: releasesv1alpha1.ModuleReference{
+						Path:    "opmodel.dev/nonexistent",
+						Version: "v0.1.0",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mr)).To(Succeed())
+
+			params := reconcileParams()
+			nn := types.NamespacedName{Name: "retry-stalled-mr", Namespace: namespace}
+			ensureFinalizer(params, nn)
+
+			result, err := opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{
+				NamespacedName: nn,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Minute))
+
+			var updated releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &updated)).To(Succeed())
+			Expect(updated.Status.NextRetryAt).NotTo(BeNil(), "nextRetryAt should be set on stalled failure")
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, mr)).To(Succeed())
+		})
+
 	})
 
 	Context("Partial failure preserves inventory", func() {
@@ -279,7 +315,8 @@ var _ = Describe("Reconcile Error Paths", func() {
 			result, err = opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{
 				NamespacedName: nn,
 			})
-			Expect(err).To(HaveOccurred(), "prune failure returns error")
+			Expect(err).NotTo(HaveOccurred(), "transient failure returns nil error with backoff")
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0), "transient failure requeues with backoff")
 
 			// Verify inventory was NOT updated (preserved from first reconcile).
 			var secondMR releasesv1alpha1.ModuleRelease

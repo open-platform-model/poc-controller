@@ -797,8 +797,9 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			}
 
 			// Reconcile should fail — prune cannot delete the non-existent GVK resource.
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
-			Expect(err).To(HaveOccurred())
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred(), "transient failure returns nil error with backoff")
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0), "transient failure requeues with backoff")
 
 			// Verify finalizer is still present (not removed due to partial failure).
 			var updated releasesv1alpha1.ModuleRelease
@@ -888,8 +889,9 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			}
 
 			// Second reconcile — drift detection fails (non-blocking), apply fails.
-			_, err = failReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
-			Expect(err).To(HaveOccurred())
+			result, err := failReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred(), "transient failure returns nil error with backoff")
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0), "transient failure requeues with backoff")
 
 			var mr releasesv1alpha1.ModuleRelease
 			Expect(k8sClient.Get(ctx, nn, &mr)).To(Succeed())
@@ -978,8 +980,9 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			}
 
 			// Third reconcile — apply succeeds, prune fails.
-			_, err = pruneFailReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
-			Expect(err).To(HaveOccurred())
+			result, err := pruneFailReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred(), "transient failure returns nil error with backoff")
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0), "transient failure requeues with backoff")
 
 			Expect(k8sClient.Get(ctx, nn, mr)).To(Succeed())
 			Expect(mr.Status.FailureCounters).NotTo(BeNil())
@@ -1130,8 +1133,9 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			}
 
 			// Second reconcile — apply fails.
-			_, err = failReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
-			Expect(err).To(HaveOccurred())
+			result, err := failReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred(), "transient failure returns nil error with backoff")
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0), "transient failure requeues with backoff")
 
 			// Verify Warning/ApplyFailed event.
 			var event string
