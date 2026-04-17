@@ -28,6 +28,13 @@ tasks:
       - cd {{.MODULE_DIR}} && CUE_REGISTRY='{{.PUBLISH_REGISTRY}}' cue mod publish {{.MODULE_VERSION}}
       - echo "Published {{.MODULE_DIR}}:{{.MODULE_VERSION}}"
 
+  publish:ghcr:
+    desc: Publish the hello module to GHCR (requires `docker login ghcr.io` or ORAS-compatible creds)
+    cmds:
+      - cd {{.MODULE_DIR}} && CUE_REGISTRY='{{.GHCR_CUE_REGISTRY}}' cue mod tidy
+      - cd {{.MODULE_DIR}} && CUE_REGISTRY='{{.GHCR_CUE_REGISTRY}}' cue mod publish {{.MODULE_VERSION}}
+      - echo "Published {{.MODULE_DIR}}:{{.MODULE_VERSION}} to ghcr.io/open-platform-model"
+
   apply:
     desc: Apply the hello ModuleRelease manifest
     cmds:
