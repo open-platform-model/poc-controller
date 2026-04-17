@@ -19,23 +19,25 @@ import (
 )
 
 // skipIfNoTestRegistry skips the current spec when the local OCI registry is
-// not available. End-to-end tests that invoke the real RegistryRenderer
-// require:
+// not available. Tests that load the fixture module (testing.opmodel.dev/test/hello)
+// require a local registry with the module published — the fixture is not
+// available on remote registries like ghcr.
 //
-//   - CUE_REGISTRY env var pointing at a reachable registry (see Makefile
-//     `make start-registry && make publish-test-module`)
-//   - a container tool (docker or podman) on PATH for connectivity checks
+// Requirements:
+//   - CUE_REGISTRY env var with a testing.opmodel.dev mapping pointing at
+//     localhost (see `task registry:start && task registry:publish-test-module`)
+//   - a container tool (docker or podman) on PATH
 //
-// When either is missing, the test skips with a clear message rather than
-// failing, so stub-based tests still run in bare environments (including CI
-// without container support).
+// When running against ghcr (CI default via `task dev:test`) these tests skip
+// automatically; use `task dev:test:local` to run them.
 func skipIfNoTestRegistry() {
 	reg := os.Getenv("CUE_REGISTRY")
 	if reg == "" {
-		Skip("CUE_REGISTRY not set — run `make start-registry && make publish-test-module` first")
+		Skip("CUE_REGISTRY not set — run `task registry:start && task registry:publish-test-module` first")
 	}
-	if !strings.Contains(reg, "testing.opmodel.dev=") {
-		Skip("CUE_REGISTRY missing testing.opmodel.dev mapping — fixture module cannot be resolved")
+	if !strings.Contains(reg, "testing.opmodel.dev=localhost") {
+		Skip("CUE_REGISTRY does not map testing.opmodel.dev to localhost — " +
+			"fixture module only available on local registry (use task dev:test:local)")
 	}
 	if !containerToolAvailable() {
 		Skip("no container tool (docker/podman) on PATH — cannot validate local registry")

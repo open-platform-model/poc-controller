@@ -28,20 +28,21 @@ import (
 	"github.com/open-platform-model/poc-controller/pkg/loader"
 )
 
+// These tests require the fixture module published to a local OCI registry.
+// They are skipped automatically in CI (ghcr has no fixture module).
+// Run with: task dev:test:local
+
 var _ = Describe("Release Synthesis Integration", func() {
 	Context("when OCI registry has the test module published", func() {
 		BeforeEach(func() {
-			if os.Getenv("CUE_REGISTRY") == "" {
-				Skip("CUE_REGISTRY not set — requires local OCI registry " +
-					"with test module published (make start-registry publish-test-module)")
-			}
+			skipIfNoTestRegistry()
 		})
 
 		It("should synthesize, load, and produce concrete components", func() {
 			dir, err := synthesis.SynthesizeRelease(synthesis.ReleaseParams{
 				Name:          "test-hello",
 				Namespace:     "default",
-				ModulePath:    "opmodel.dev/test/hello@v0",
+				ModulePath:    "testing.opmodel.dev/test/hello@v0",
 				ModuleVersion: "v0.0.1",
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -74,7 +75,7 @@ var _ = Describe("Release Synthesis Integration", func() {
 			dir, err := synthesis.SynthesizeRelease(synthesis.ReleaseParams{
 				Name:          "meta-test",
 				Namespace:     "test-ns",
-				ModulePath:    "opmodel.dev/test/hello@v0",
+				ModulePath:    "testing.opmodel.dev/test/hello@v0",
 				ModuleVersion: "v0.0.1",
 			})
 			Expect(err).NotTo(HaveOccurred())
