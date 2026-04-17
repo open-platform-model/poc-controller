@@ -22,4 +22,4 @@
 - [x] 4.2 Run `make fmt vet`
 - [x] 4.3 Run `make lint` and confirm SA1019 is gone
 - [x] 4.4 Run `make test` and confirm all envtest specs pass
-- [ ] 4.5 Push branch; verify the GitHub Actions lint job is green on the change PR
+- [x] 4.5 Push branch; verify the GitHub Actions lint job is green on the change PR
