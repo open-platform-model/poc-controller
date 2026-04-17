@@ -230,6 +230,7 @@ func main() {
 
 	if err := (&controller.ModuleReleaseReconciler{
 		Client:          mgr.GetClient(),
+		APIReader:       mgr.GetAPIReader(),
 		Scheme:          mgr.GetScheme(),
 		RestConfig:      restConfig,
 		Provider:        opmProvider,
