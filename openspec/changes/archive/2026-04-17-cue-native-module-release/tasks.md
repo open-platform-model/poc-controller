@@ -63,3 +63,30 @@
       (fixed: test-e2e now starts registry, patches deployment with --registry;
       controller starts successfully; metrics test has pre-existing timeout issue)
 - [x] Add note to constitution about Principle I supersession
+
+### Registry Precedence Test
+
+- [x] Extract `resolveRegistry(flagValue string) string` helper in `cmd/main.go`
+      (replaces inline `if registry == "" { registry = os.Getenv("OPM_REGISTRY") }`)
+- [x] Add Ginkgo test `cmd/registry_test.go` covering flag-wins, env-fallback,
+      both-empty, flag-precedence-over-env cases
+- [x] Delete the old `TestRegistryConfigPrecedence_TODO` skip stub in `cmd/main_test.go`
+
+### BundleRelease Flux Source Stub Cleanup
+
+- [x] Remove `sourcev1` import and `_ = sourcev1.OCIRepository{}` stub from
+      `internal/controller/bundlerelease_controller.go`
+- [x] Remove `+kubebuilder:rbac:groups=source.toolkit.fluxcd.io,...` markers
+      from `bundlerelease_controller.go`
+- [x] Remove `sourcev1` import and `sourcev1.AddToScheme(scheme)` from `cmd/main.go`
+- [x] Remove `sourcev1` scheme registrations from `internal/controller/suite_test.go`
+      and `test/integration/reconcile/suite_test.go`
+- [x] Delete `internal/controller/testdata/crds/source.toolkit.fluxcd.io_ocirepositories.yaml`
+      (and empty `testdata/crds` directory)
+- [x] Update `bundlerelease_controller_test.go` SourceRef fixture to use a
+      non-Flux placeholder Kind
+- [x] Run `make manifests generate` — regenerates `config/rbac/role.yaml`
+      (OCIRepository rules dropped; no other diffs)
+- [x] Update spec's "ADDED: Registry configuration" section to document the
+      built-in flag default and explicit precedence ordering
+- [x] Add "REMOVED: BundleRelease Flux source stub" section to spec delta

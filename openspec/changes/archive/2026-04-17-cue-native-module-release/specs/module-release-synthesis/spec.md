@@ -20,14 +20,26 @@ The controller MUST reject a ModuleRelease CR that:
 
 The controller MUST accept a `--registry` flag for CUE registry configuration.
 
-The controller MUST read the `OPM_REGISTRY` environment variable as a fallback when
-`--registry` is not provided.
+The controller MUST read the `OPM_REGISTRY` environment variable as a fallback
+when the `--registry` flag value is empty.
 
-The controller MUST set `CUE_REGISTRY` to the resolved registry value before any
-CUE module evaluation.
+The controller MUST set `CUE_REGISTRY` and `OPM_REGISTRY` to the resolved
+registry value before any CUE module evaluation.
 
-If neither `--registry` nor `OPM_REGISTRY` is set, the controller MUST use CUE's
-default registry resolution behavior.
+The controller ships a built-in default `--registry` value routing
+`opmodel.dev/*` and `testing.opmodel.dev/*` to `ghcr.io/open-platform-model`
+with `registry.cue.works` as a fallback mirror. Operators override by passing
+an explicit `--registry=<mapping>`, or disable the built-in default by passing
+`--registry=""` (which then falls through to `OPM_REGISTRY`).
+
+Precedence (highest first):
+
+1. `--registry` flag value (including the built-in default when the operator
+   does not pass the flag).
+2. `OPM_REGISTRY` environment variable (reached only when `--registry` is
+   explicitly empty).
+3. CUE's built-in default resolution (reached only when both `--registry` and
+   `OPM_REGISTRY` are empty).
 
 ### ADDED: Release synthesis
 
@@ -101,3 +113,23 @@ The `status.conditions` MUST report:
 3. CUE resolves new version from registry.
 4. New resources rendered and applied.
 5. Previous resources pruned if no longer in inventory (when `prune: true`).
+
+### REMOVED: BundleRelease Flux source stub
+
+The `bundlerelease_controller` MUST NOT import
+`github.com/fluxcd/source-controller/api/v1`, MUST NOT declare RBAC markers for
+`source.toolkit.fluxcd.io/ocirepositories`, and MUST NOT retain a
+`sourcev1.OCIRepository{}` import-keeper in its reconcile body.
+
+Rationale: BundleRelease is not yet implemented. When it is implemented it
+will resolve its sources via CUE-native module resolution consistent with
+ModuleRelease, not via Flux source-controller. Keeping the Flux stub in place
+is misleading.
+
+The `internal/source/` package remains unchanged and retains its
+`sourcev1` dependency. It is not wired into any controller today and is kept
+available for potential future use.
+
+The `BundleRelease.spec.sourceRef` API field is out of scope for this change
+and remains in `api/v1alpha1/bundlerelease_types.go`. Removing the field is a
+separate future API change.

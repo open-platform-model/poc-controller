@@ -68,11 +68,15 @@ dependencies from a registry. The Flux source layer is redundant for CUE modules
 
 - CR schema change (remove sourceRef, update module)
 - Release package synthesis
-- Registry configuration (flag + env var)
+- Registry configuration (flag + env var; ships with built-in default routing
+  `opmodel.dev/*` and `testing.opmodel.dev/*` to `ghcr.io/open-platform-model`)
 - Update render pipeline entry point
 - Update reconcile loop
 - Fix existing tests to use real module patterns
 - Update e2e tests and samples
+- Remove dead Flux source stub from `bundlerelease_controller` (import, RBAC
+  markers, `sourcev1.OCIRepository{}` import-keeper). BundleRelease will not
+  use Flux OCIRepository when implemented.
 
 **Out of scope:**
 

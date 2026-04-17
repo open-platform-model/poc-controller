@@ -29,7 +29,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"cuelang.org/go/cue/cuecontext"
-	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -63,13 +62,11 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	Expect(releasesv1alpha1.AddToScheme(scheme.Scheme)).To(Succeed())
-	Expect(sourcev1.AddToScheme(scheme.Scheme)).To(Succeed())
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "..", "config", "crd", "bases"),
-			filepath.Join("..", "..", "..", "internal", "controller", "testdata", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,
 	}

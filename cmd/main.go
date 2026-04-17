@@ -35,7 +35,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	releasesv1alpha1 "github.com/open-platform-model/poc-controller/api/v1alpha1"
 	"github.com/open-platform-model/poc-controller/internal/apply"
 	"github.com/open-platform-model/poc-controller/internal/catalog"
@@ -52,8 +51,6 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(sourcev1.AddToScheme(scheme))
-
 	utilruntime.Must(releasesv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -201,9 +198,7 @@ func main() {
 	}
 
 	// Registry precedence: --registry flag > OPM_REGISTRY env > CUE default.
-	if registry == "" {
-		registry = os.Getenv("OPM_REGISTRY")
-	}
+	registry = resolveRegistry(registry)
 
 	// Set CUE environment variables before any CUE loading.
 	// These must be set in main() before mgr.Start() spawns goroutines,
@@ -268,4 +263,14 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// resolveRegistry picks the effective CUE registry mapping.
+// Precedence: --registry flag value > OPM_REGISTRY env var > "".
+// An empty return value signals "use CUE's built-in default resolution".
+func resolveRegistry(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv("OPM_REGISTRY")
 }
