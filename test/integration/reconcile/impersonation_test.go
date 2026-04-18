@@ -154,6 +154,106 @@ var _ = Describe("ServiceAccount Impersonation", func() {
 		})
 	})
 
+	Context("Reconcile with group-subject RoleBinding", func() {
+		It("should apply when the RoleBinding authorizes system:serviceaccounts:<namespace>", func() {
+			mrName := "imp-group-mr"
+			saName := "group-sa"
+
+			// Create SA but bind permissions to the SA's implicit namespace group,
+			// not directly to the SA. This exercises the Groups field on the
+			// impersonation config — without it the apply fails with Forbidden.
+			sa := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      saName,
+					Namespace: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, sa)).To(Succeed())
+
+			role := &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: "imp-group-role"},
+				Rules: []rbacv1.PolicyRule{
+					{
+						APIGroups: []string{""},
+						Resources: []string{"configmaps"},
+						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, role)).To(Succeed())
+
+			binding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "imp-group-binding"},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     "imp-group-role",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						APIGroup: "rbac.authorization.k8s.io",
+						Kind:     "Group",
+						Name:     "system:serviceaccounts:" + namespace,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, binding)).To(Succeed())
+
+			mr := &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      mrName,
+					Namespace: namespace,
+				},
+				Spec: releasesv1alpha1.ModuleReleaseSpec{
+					Module: releasesv1alpha1.ModuleReference{
+						Path:    "opmodel.dev/test/module",
+						Version: "v0.1.0",
+					},
+					Prune:              true,
+					ServiceAccountName: saName,
+					Values:             &releasesv1alpha1.RawValues{},
+				},
+			}
+			mr.Spec.Values.Raw = []byte(`{"message": "group-subject"}`)
+			Expect(k8sClient.Create(ctx, mr)).To(Succeed())
+
+			params := reconcileParamsWithConfig()
+			nn := types.NamespacedName{Name: mrName, Namespace: namespace}
+			ensureFinalizer(params, nn)
+
+			result, err := opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{
+				NamespacedName: nn,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			var updated releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &updated)).To(Succeed())
+
+			ready := apimeta.FindStatusCondition(updated.Status.Conditions, status.ReadyCondition)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionTrue),
+				"group-subject RoleBinding must authorize apply once impersonation carries Groups")
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-module", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: mrName, Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "imp-group-binding"},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: "imp-group-role"},
+			})).To(Succeed())
+		})
+	})
+
 	Context("Reconcile with missing ServiceAccount", func() {
 		It("should stall with ImpersonationFailed when SA does not exist", func() {
 			mrName := "imp-missing-mr"

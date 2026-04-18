@@ -47,3 +47,19 @@ func TestComputeStaleSet_VersionAgnosticIdentity(t *testing.T) {
 	stale := ComputeStaleSet(previous, current)
 	assert.Empty(t, stale, "version change should not produce stale entries")
 }
+
+// TestComputeStaleSet_ComponentRenameSafe protects against data-loss when a
+// CUE refactor moves a resource (same GVK+namespace+name) between components.
+// The live object is patched in place by SSA with the new component label;
+// the previous inventory entry MUST NOT be added to the stale set, or Prune
+// would delete the object SSA just applied.
+func TestComputeStaleSet_ComponentRenameSafe(t *testing.T) {
+	previous := []releasesv1alpha1.InventoryEntry{
+		{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "app", Version: "v1", Component: "web"},
+	}
+	current := []releasesv1alpha1.InventoryEntry{
+		{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "app", Version: "v1", Component: "frontend"},
+	}
+	stale := ComputeStaleSet(previous, current)
+	assert.Empty(t, stale, "component rename must not produce stale entries")
+}

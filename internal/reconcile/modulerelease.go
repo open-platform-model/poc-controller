@@ -297,6 +297,14 @@ func ReconcileModuleRelease(
 		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 
+	// Persist the rendered release UUID on Status. All rendered resources
+	// carry the same UUID (stamped by the CUE catalog's moduleLabels merge);
+	// reading the first non-empty one is sufficient. Consumed by the prune
+	// ownership guard in both apply→prune and deletion paths.
+	if uuid := extractReleaseUUID(resources); uuid != "" {
+		mr.Status.ReleaseUUID = uuid
+	}
+
 	lastApplied := status.DigestSet{
 		Source:    mr.Status.LastAppliedSourceDigest,
 		Config:    mr.Status.LastAppliedConfigDigest,
@@ -516,7 +524,7 @@ func handleDeletion(
 				deleteClient = impClient
 			}
 		}
-		pruneResult, err := apply.Prune(ctx, deleteClient, mr.Status.Inventory.Entries)
+		pruneResult, err := apply.Prune(ctx, deleteClient, mr.Status.ReleaseUUID, mr.Status.Inventory.Entries)
 		if err != nil {
 			log.Error(err, "Partial failure during deletion cleanup, retaining finalizer")
 			return err
@@ -563,7 +571,7 @@ func pruneStaleResources(
 		return Applied, true, 0, nil
 	}
 	log := logf.FromContext(ctx)
-	pruneResult, err := apply.Prune(ctx, c, staleSet)
+	pruneResult, err := apply.Prune(ctx, c, mr.Status.ReleaseUUID, staleSet)
 	if err != nil {
 		recorder.Eventf(mr, nil, corev1.EventTypeWarning, status.PruneFailedReason, "Prune", "%s", err)
 		if mr.Spec.ServiceAccountName != "" && isForbidden(err) {
@@ -625,6 +633,20 @@ func recordReconcileMetrics(name, namespace string, outcome Outcome, duration ti
 	if reconciled {
 		opmmetrics.SetInventorySize(name, namespace, inventoryCount)
 	}
+}
+
+// extractReleaseUUID returns the release UUID carried by the rendered
+// resources via the `module-release.opmodel.dev/uuid` label. All rendered
+// resources carry the same UUID (stamped by the catalog's moduleLabels
+// merge), so the first non-empty value wins. Returns "" if no resource
+// carries the label.
+func extractReleaseUUID(resources []*unstructured.Unstructured) string {
+	for _, r := range resources {
+		if uuid := r.GetLabels()[core.LabelModuleReleaseUUID]; uuid != "" {
+			return uuid
+		}
+	}
+	return ""
 }
 
 // toUnstructuredSlice converts core.Resource slice to unstructured slice for apply.

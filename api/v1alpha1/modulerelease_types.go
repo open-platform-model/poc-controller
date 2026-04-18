@@ -50,6 +50,13 @@ type ModuleReleaseStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// ReleaseUUID is the globally-unique identity of the rendered ModuleRelease,
+	// read from the `module-release.opmodel.dev/uuid` label on rendered resources.
+	// Populated on the first successful render; consumed by the prune ownership
+	// guard (including the deletion path where a fresh render is not available).
+	// +optional
+	ReleaseUUID string `json:"releaseUUID,omitempty"`
+
 	// conditions represent the current state of the ModuleRelease resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//

@@ -2,6 +2,7 @@ package apply
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -10,6 +11,24 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func TestBuildImpersonationConfig_SetsExpectedGroups(t *testing.T) {
+	cfg := buildImpersonationConfig("team-a", "deploy-sa")
+
+	const wantUser = "system:serviceaccount:team-a:deploy-sa"
+	if cfg.UserName != wantUser {
+		t.Fatalf("UserName = %q, want %q", cfg.UserName, wantUser)
+	}
+
+	wantGroups := []string{
+		"system:serviceaccounts",
+		"system:serviceaccounts:team-a",
+		"system:authenticated",
+	}
+	if !slices.Equal(cfg.Groups, wantGroups) {
+		t.Fatalf("Groups = %v, want %v", cfg.Groups, wantGroups)
+	}
+}
 
 func TestNewImpersonatedClient(t *testing.T) {
 	scheme := runtime.NewScheme()

@@ -255,6 +255,36 @@ var _ = Describe("Reconcile Error Paths", func() {
 
 	})
 
+	Context("Status.ReleaseUUID persistence", func() {
+		It("populates Status.ReleaseUUID after a successful render", func() {
+			mrName := "uuid-persist-mr"
+			createModuleRelease(mrName)
+
+			params := reconcileParams()
+			nn := types.NamespacedName{Name: mrName, Namespace: namespace}
+			ensureFinalizer(params, nn)
+
+			result, err := opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{
+				NamespacedName: nn,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			var updated releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &updated)).To(Succeed())
+			Expect(updated.Status.ReleaseUUID).To(Equal(stubReleaseUUID),
+				"Status.ReleaseUUID must be set from the rendered resources' UUID label")
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-module", Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: mrName, Namespace: namespace},
+			})).To(Succeed())
+		})
+	})
+
 	Context("Partial failure preserves inventory", func() {
 		It("should keep previous inventory when prune fails after successful apply", func() {
 			// Create MR with prune=true.

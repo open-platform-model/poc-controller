@@ -38,6 +38,7 @@ import (
 	"github.com/open-platform-model/poc-controller/internal/apply"
 	opmreconcile "github.com/open-platform-model/poc-controller/internal/reconcile"
 	"github.com/open-platform-model/poc-controller/internal/status"
+	"github.com/open-platform-model/poc-controller/pkg/core"
 )
 
 var _ = Describe("ModuleRelease Reconcile Loop", func() {
@@ -624,11 +625,15 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			}
 			Expect(k8sClient.Create(ctx, mr)).To(Succeed())
 
-			// Create a ConfigMap that's in the inventory.
+			// Create a ConfigMap that's in the inventory. OPM managed-by label is
+			// required for the prune ownership guard to permit deletion.
 			cm := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "safety-test-cm",
 					Namespace: namespace,
+					Labels: map[string]string{
+						core.LabelManagedBy: core.LabelManagedByControllerValue,
+					},
 				},
 				Data: map[string]string{"key": "value"},
 			}
@@ -961,7 +966,22 @@ var _ = Describe("ModuleRelease Reconcile Loop", func() {
 			_, err = realReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Add a fake stale entry to the inventory.
+			// Pre-create the stale ConfigMap with OPM managed-by so the prune
+			// ownership guard permits deletion; the interceptor will reject the
+			// delete and drive the PruneFailed counter increment.
+			staleCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "stale-cm",
+					Namespace: namespace,
+					Labels: map[string]string{
+						core.LabelManagedBy: core.LabelManagedByControllerValue,
+					},
+				},
+				Data: map[string]string{"key": "value"},
+			}
+			Expect(k8sClient.Create(ctx, staleCM)).To(Succeed())
+
+			// Add a stale entry to the inventory.
 			Expect(k8sClient.Get(ctx, nn, mr)).To(Succeed())
 			mr.Status.Inventory.Entries = append(mr.Status.Inventory.Entries,
 				releasesv1alpha1.InventoryEntry{
