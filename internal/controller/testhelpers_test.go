@@ -51,7 +51,10 @@ func testProvider() *provider.Provider {
 					metadata: {
 						name:      #context.#moduleReleaseMetadata.name
 						namespace: #context.#moduleReleaseMetadata.namespace
-						labels:    #context.#runtimeLabels
+						labels: {
+							"app.kubernetes.io/managed-by":         #context.#runtimeName
+							"module-release.opmodel.dev/namespace": #context.#moduleReleaseMetadata.namespace
+						}
 					}
 					data: {
 						message: #component.data.message

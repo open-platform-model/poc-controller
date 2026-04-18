@@ -13,7 +13,7 @@ import (
 
 // CatalogVersion is the pinned catalog version the controller was built against.
 // Update when releasing a new controller version.
-const CatalogVersion = "v1.3.2"
+const CatalogVersion = "v1.3.4"
 
 // CUELanguageVersion is the CUE language version for synthesized modules.
 const CUELanguageVersion = "v0.16.1"

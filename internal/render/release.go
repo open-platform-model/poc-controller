@@ -63,18 +63,6 @@ func RenderLoadedModuleRelease(
 		return nil, fmt.Errorf("extracting module from release: %w", err)
 	}
 
-	cueCtx := raw.Context()
-
-	// Inject #runtimeLabels so component transformers pick up the managed-by
-	// label consistent with the synthesized-release path.
-	runtimeLabels := cueCtx.CompileString(fmt.Sprintf(`{
-	%q: %q
-}`, core.LabelManagedBy, core.LabelManagedByControllerValue), cue.Filename("runtimeLabels"))
-	if runtimeLabels.Err() != nil {
-		return nil, fmt.Errorf("compiling runtime labels: %w", runtimeLabels.Err())
-	}
-	raw = raw.FillPath(cue.ParsePath("#runtimeLabels"), runtimeLabels)
-
 	// Release CRDs carry no `values` — the CUE package already specifies them.
 	// Pass nil so ParseModuleRelease falls back to the module #config defaults.
 	rel, err := module.ParseModuleRelease(ctx, raw, mod, nil)
@@ -82,11 +70,9 @@ func RenderLoadedModuleRelease(
 		return nil, fmt.Errorf("parsing module release: %w", err)
 	}
 
-	controllerLabels := map[string]string{
-		core.LabelManagedBy:              core.LabelManagedByControllerValue,
-		core.LabelModuleReleaseNamespace: rel.Metadata.Namespace,
-	}
-	result, err := pkgrender.ProcessModuleRelease(ctx, rel, prov, controllerLabels)
+	// ProcessModuleRelease injects the controller's runtime identity into each
+	// transformer's #context.
+	result, err := pkgrender.ProcessModuleRelease(ctx, rel, prov, core.LabelManagedByControllerValue)
 	if err != nil {
 		return nil, fmt.Errorf("processing module release: %w", err)
 	}

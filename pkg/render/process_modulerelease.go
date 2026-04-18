@@ -10,13 +10,13 @@ import (
 
 // ProcessModuleRelease renders a prepared release with the given provider.
 // The release must already be fully prepared via module.ParseModuleRelease.
-// If runtimeLabels is non-nil, it overrides the default runtime labels injected
-// into each transformer's #context.#runtimeLabels during execution.
+// If runtimeName is non-empty, it overrides the default runtime identity
+// injected into each transformer's #context.#runtimeName during execution.
 func ProcessModuleRelease(
 	ctx context.Context,
 	rel *module.Release,
 	p *provider.Provider,
-	runtimeLabels map[string]string,
+	runtimeName string,
 ) (*ModuleResult, error) {
 	schemaComponents := rel.MatchComponents()
 	if !schemaComponents.Exists() {
@@ -34,6 +34,6 @@ func ProcessModuleRelease(
 	}
 
 	renderer := NewModule(p)
-	renderer.runtimeLabels = runtimeLabels
+	renderer.runtimeName = runtimeName
 	return renderer.Execute(ctx, rel, schemaComponents, dataComponents, plan)
 }

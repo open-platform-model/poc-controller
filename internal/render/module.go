@@ -40,8 +40,10 @@ type RenderResult struct {
 //  1. Synthesize a temporary CUE module with module.cue + release.cue.
 //  2. Load the package (CUE resolves dependencies from OCI registry).
 //  3. Extract module metadata and config schema from the loaded release.
-//  4. Inject values and #runtimeLabels.
+//  4. Inject values.
 //  5. Build release via ParseModuleRelease → ProcessModuleRelease.
+//     The controller's runtime identity is injected into each transformer's
+//     #context.#runtimeName via ProcessModuleRelease.
 //  6. Build inventory entries from rendered resources.
 func RenderModuleFromRegistry(
 	ctx context.Context,
@@ -90,27 +92,15 @@ func RenderModuleFromRegistry(
 		cueValues = append(cueValues, mod.Config)
 	}
 
-	// Inject #runtimeLabels.
-	runtimeLabels := cueCtx.CompileString(fmt.Sprintf(`{
-	%q: %q
-}`, core.LabelManagedBy, core.LabelManagedByControllerValue), cue.Filename("runtimeLabels"))
-	if runtimeLabels.Err() != nil {
-		return nil, fmt.Errorf("compiling runtime labels: %w", runtimeLabels.Err())
-	}
-	raw = raw.FillPath(cue.ParsePath("#runtimeLabels"), runtimeLabels)
-
 	// Build the release: validate values, fill, ensure concrete.
 	rel, err := module.ParseModuleRelease(ctx, raw, mod, cueValues)
 	if err != nil {
 		return nil, fmt.Errorf("parsing module release: %w", err)
 	}
 
-	// Render with the caller-supplied provider.
-	controllerLabels := map[string]string{
-		core.LabelManagedBy:              core.LabelManagedByControllerValue,
-		core.LabelModuleReleaseNamespace: rel.Metadata.Namespace,
-	}
-	result, err := pkgrender.ProcessModuleRelease(ctx, rel, prov, controllerLabels)
+	// Render with the caller-supplied provider. ProcessModuleRelease injects
+	// the controller's runtime identity into each transformer's #context.
+	result, err := pkgrender.ProcessModuleRelease(ctx, rel, prov, core.LabelManagedByControllerValue)
 	if err != nil {
 		return nil, fmt.Errorf("processing module release: %w", err)
 	}
