@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.3](https://github.com/open-platform-model/poc-controller/compare/v0.4.2...v0.4.3) (2026-04-18)
+
+
+### Bug Fixes
+
+* **reconcile:** correctness trio (rename, prune guard, sa groups) ([30dc138](https://github.com/open-platform-model/poc-controller/commit/30dc138f98a13ea0c4fb221576000a9861547a04))
+
+
+### Documentation
+
+* **design:** add impersonation and privilege escalation analysis ([dfed6f4](https://github.com/open-platform-model/poc-controller/commit/dfed6f44cfd1a132c2c2ddc1f83204bb89b2a175))
+* **openspec:** record §8 scratch-revert proof results ([af2deb6](https://github.com/open-platform-model/poc-controller/commit/af2deb62d5edd50d7249c6fd9a51bb2f599fc7c2))
+
+
+### Miscellaneous Chores
+
+* **manager:** raise controller resource limits to 1Gi/2 CPU ([3ca09ac](https://github.com/open-platform-model/poc-controller/commit/3ca09ac10f0789a59eded3e4f57d813b3265ce5e))
+* **openspec:** archive add-image-build-cicd and sync spec ([5c7ea83](https://github.com/open-platform-model/poc-controller/commit/5c7ea83831907dd8d0684cd5ad68c26371d34c60))
+* **openspec:** archive fix-reconcile-correctness-trio and sync spec ([b18a03a](https://github.com/open-platform-model/poc-controller/commit/b18a03adc1c24e2c95509acc687f2e04ea629d18))
+
 ## [0.4.2](https://github.com/open-platform-model/poc-controller/compare/v0.4.1...v0.4.2) (2026-04-18)
 
 
