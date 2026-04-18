@@ -15,3 +15,4 @@ Collection of all design documents
 - `runtime-owned-labels-and-ownership-metadata.md` - ownership of rendered labels/annotations and runtime-controlled metadata
 - `naming-taxonomy.md` - naming taxonomy for CRDs, workload metadata, inventory/status, and CUE modules
 - `ssa-ownership-and-drift-policy.md` - server-side apply, pruning rules, drift detection, and ownership conflict policy
+- `impersonation-and-privilege-escalation.md` - analysis of the `spec.serviceAccountName` escalation surface and option space for constraining it
