@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/open-platform-model/poc-controller/compare/v0.4.1...v0.4.2) (2026-04-18)
+
+
+### Bug Fixes
+
+* **ci:** write sbom to explicit path for cosign attest ([2a62336](https://github.com/open-platform-model/poc-controller/commit/2a62336eae89c8e18bb5c683b4eda6f805b123c0))
+* **ci:** write sbom to explicit path for cosign attest ([069975a](https://github.com/open-platform-model/poc-controller/commit/069975a9be3caacf8f2fb3883cfc2b06b732243b))
+
 ## [0.4.1](https://github.com/open-platform-model/poc-controller/compare/v0.4.0...v0.4.1) (2026-04-17)
 
 
