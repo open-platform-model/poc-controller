@@ -459,7 +459,9 @@ func applyAndPruneRelease(
 	phases.pruneRan = true
 	outcome := Applied
 	if rel.Spec.Prune && len(staleSet) > 0 {
-		pruneResult, pruneErr := apply.Prune(ctx, applyClient, staleSet)
+		// Release does not persist a release UUID on Status; pass empty and rely
+		// on the managed-by check in the prune guard.
+		pruneResult, pruneErr := apply.Prune(ctx, applyClient, "", staleSet)
 		if pruneErr != nil {
 			phases.pruneFailed = true
 			params.EventRecorder.Eventf(rel, nil, corev1.EventTypeWarning, status.PruneFailedReason, "Prune", "%s", pruneErr)
@@ -621,7 +623,7 @@ func handleReleaseDeletion(ctx context.Context, params *ReleaseParams, rel *rele
 				deleteClient = impClient
 			}
 		}
-		pruneResult, err := apply.Prune(ctx, deleteClient, rel.Status.Inventory.Entries)
+		pruneResult, err := apply.Prune(ctx, deleteClient, "", rel.Status.Inventory.Entries)
 		if err != nil {
 			log.Error(err, "Partial failure during deletion cleanup, retaining finalizer")
 			return err

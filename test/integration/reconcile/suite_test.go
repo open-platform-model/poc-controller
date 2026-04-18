@@ -108,6 +108,11 @@ func getFirstFoundEnvTestBinaryDir() string {
 	return ""
 }
 
+// stubReleaseUUID is the deterministic release UUID stamped by the default
+// stub render result. Tests may assert against this value when verifying
+// Status.ReleaseUUID persistence.
+const stubReleaseUUID = "00000000-0000-0000-0000-00000000beef"
+
 // stubRenderer is a test ModuleRenderer that returns a pre-built result or
 // an error without touching an OCI registry. Leave result nil + err nil to
 // use the default ConfigMap-based render result.
@@ -155,6 +160,7 @@ func stubRenderResult(namespace string, values *releasesv1alpha1.RawValues) *ren
 		labels: {
 			%q: %q
 			%q: %q
+			%q: %q
 		}
 	}
 	data: {
@@ -163,6 +169,7 @@ func stubRenderResult(namespace string, values *releasesv1alpha1.RawValues) *ren
 }`, namespace,
 		core.LabelManagedBy, core.LabelManagedByControllerValue,
 		core.LabelModuleReleaseNamespace, namespace,
+		core.LabelModuleReleaseUUID, stubReleaseUUID,
 		message))
 	if cm.Err() != nil {
 		panic(fmt.Sprintf("compiling stub ConfigMap: %v", cm.Err()))

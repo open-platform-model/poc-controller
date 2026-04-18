@@ -23,9 +23,16 @@ func NewEntryFromResource(r *unstructured.Unstructured) releasesv1alpha1.Invento
 	}
 }
 
-// IdentityEqual returns true if two entries identify the same owned resource.
-// Compares Group, Kind, Namespace, Name, and Component. Version is excluded
-// to prevent false orphans during Kubernetes API version migrations.
+// IdentityEqual returns true if two entries identify the same owned resource,
+// component-aware. Compares Group, Kind, Namespace, Name, and Component.
+// Version is excluded to prevent false orphans during Kubernetes API version
+// migrations.
+//
+// This helper is NOT the comparator used by ComputeStaleSet — that uses
+// K8sIdentityEqual so component renames (same GVK+namespace+name, different
+// component label) do not produce stale entries for live objects that SSA
+// apply patches in place. Callers needing K8s-resource identity (the apiserver
+// view: one live object per GVK+namespace+name) MUST use K8sIdentityEqual.
 func IdentityEqual(a, b releasesv1alpha1.InventoryEntry) bool {
 	return a.Group == b.Group &&
 		a.Kind == b.Kind &&

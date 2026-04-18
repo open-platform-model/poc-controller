@@ -43,9 +43,7 @@ func NewImpersonatedClient(
 	}
 
 	impCfg := rest.CopyConfig(cfg)
-	impCfg.Impersonate = rest.ImpersonationConfig{
-		UserName: fmt.Sprintf("system:serviceaccount:%s:%s", namespace, saName),
-	}
+	impCfg.Impersonate = buildImpersonationConfig(namespace, saName)
 
 	impClient, err := client.New(impCfg, client.Options{Scheme: scheme})
 	if err != nil {
@@ -53,4 +51,21 @@ func NewImpersonatedClient(
 	}
 
 	return impClient, nil
+}
+
+// buildImpersonationConfig returns the ImpersonationConfig for a ServiceAccount
+// identity, matching what the apiserver's serviceaccount.TokenAuthenticator
+// would inject for a token authenticating as the same SA. Without Groups, RBAC
+// bindings whose subjects target system:serviceaccounts[:ns] or
+// system:authenticated silently fail under impersonation even though the same
+// SA succeeds with token auth.
+func buildImpersonationConfig(namespace, saName string) rest.ImpersonationConfig {
+	return rest.ImpersonationConfig{
+		UserName: fmt.Sprintf("system:serviceaccount:%s:%s", namespace, saName),
+		Groups: []string{
+			"system:serviceaccounts",
+			"system:serviceaccounts:" + namespace,
+			"system:authenticated",
+		},
+	}
 }

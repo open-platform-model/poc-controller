@@ -59,6 +59,10 @@ task dev:e2e                       # build, deploy, test, cleanup
 
 **Infrastructure:** Kind cluster. Slow. May install CertManager (skip with `CERT_MANAGER_INSTALL_SKIP=true`).
 
+### Manager-driven behavior MUST NOT be tested via direct `Reconcile` calls
+
+Behaviors that depend on controller-runtime wiring — predicates, watch events, owner-ref-driven enqueue, finalizer-add semantics — MUST be exercised through an envtest manager (created via `manager.New` and started in the suite's `BeforeSuite` or the test's setup block), not by calling `Reconcile` directly. Direct `Reconcile` calls test the function, not the controller; they cannot detect predicate-drop, watch-filtering, or workqueue-routing bugs. The finalizer-requeue regression in `fix-reconcile-correctness-trio` is the canonical example: every existing reconcile test passed because they called `Reconcile` twice in succession, bypassing the `GenerationChangedPredicate` that filtered the bug into existence in production.
+
 ## Decision Flowchart
 
 ```

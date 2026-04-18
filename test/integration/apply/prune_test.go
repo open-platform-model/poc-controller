@@ -31,7 +31,20 @@ import (
 
 	releasesv1alpha1 "github.com/open-platform-model/poc-controller/api/v1alpha1"
 	"github.com/open-platform-model/poc-controller/internal/apply"
+	"github.com/open-platform-model/poc-controller/pkg/core"
 )
+
+const testOwnerUUID = "00000000-0000-0000-0000-0000000000aa"
+
+// ownedLabels returns the label set that the prune ownership guard expects on
+// a ConfigMap that is OPM-managed and belongs to the release identified by
+// testOwnerUUID.
+func ownedLabels() map[string]string {
+	return map[string]string{
+		core.LabelManagedBy:         core.LabelManagedByControllerValue,
+		core.LabelModuleReleaseUUID: testOwnerUUID,
+	}
+}
 
 var _ = Describe("Prune", func() {
 	Context("When stale set contains a ConfigMap", func() {
@@ -40,6 +53,7 @@ var _ = Describe("Prune", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "prune-test-cm",
 					Namespace: "default",
+					Labels:    ownedLabels(),
 				},
 				Data: map[string]string{"key": "value"},
 			}
@@ -55,7 +69,7 @@ var _ = Describe("Prune", func() {
 			}}
 
 			By("pruning the stale set")
-			result, err := apply.Prune(ctx, k8sClient, stale)
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Deleted).To(Equal(1))
 			Expect(result.Skipped).To(Equal(0))
@@ -79,7 +93,7 @@ var _ = Describe("Prune", func() {
 				Name:    "prune-test-ns",
 			}}
 
-			result, err := apply.Prune(ctx, k8sClient, stale)
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Deleted).To(Equal(0))
 			Expect(result.Skipped).To(Equal(1))
@@ -95,7 +109,7 @@ var _ = Describe("Prune", func() {
 				Name:      "prune-already-gone-cm",
 			}}
 
-			result, err := apply.Prune(ctx, k8sClient, stale)
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Deleted).To(Equal(0))
 			Expect(result.Skipped).To(Equal(0))
@@ -104,7 +118,7 @@ var _ = Describe("Prune", func() {
 
 	Context("When stale set is empty", func() {
 		It("should be a no-op and return zero counts", func() {
-			result, err := apply.Prune(ctx, k8sClient, nil)
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Deleted).To(Equal(0))
 			Expect(result.Skipped).To(Equal(0))
@@ -120,7 +134,7 @@ var _ = Describe("Prune", func() {
 				Name:    "prune-test-crd.example.com",
 			}}
 
-			result, err := apply.Prune(ctx, k8sClient, stale)
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Deleted).To(Equal(0))
 			Expect(result.Skipped).To(Equal(1))
@@ -133,6 +147,7 @@ var _ = Describe("Prune", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "prune-mixed-cm",
 					Namespace: "default",
+					Labels:    ownedLabels(),
 				},
 				Data: map[string]string{"key": "value"},
 			}
@@ -155,7 +170,7 @@ var _ = Describe("Prune", func() {
 			}
 
 			By("pruning the mixed stale set")
-			result, err := apply.Prune(ctx, k8sClient, stale)
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Deleted).To(Equal(1))
 			Expect(result.Skipped).To(Equal(1))
@@ -177,6 +192,7 @@ var _ = Describe("Prune", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "prune-failslow-ok",
 					Namespace: "default",
+					Labels:    ownedLabels(),
 				},
 				Data: map[string]string{"key": "ok"},
 			}
@@ -184,6 +200,7 @@ var _ = Describe("Prune", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "prune-failslow-fail",
 					Namespace: "default",
+					Labels:    ownedLabels(),
 				},
 				Data: map[string]string{"key": "fail"},
 			}
@@ -221,7 +238,7 @@ var _ = Describe("Prune", func() {
 			}
 
 			By("pruning with the failing client")
-			result, err := apply.Prune(ctx, failingClient, stale)
+			result, err := apply.Prune(ctx, failingClient, testOwnerUUID, stale)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("injected delete failure"))
 			Expect(result.Deleted).To(Equal(1))
@@ -242,6 +259,144 @@ var _ = Describe("Prune", func() {
 				Namespace: "default",
 				Name:      "prune-failslow-fail",
 			}, fetched)).To(Succeed())
+		})
+	})
+
+	Context("When live resource is missing the OPM managed-by label", func() {
+		It("should skip the resource (foreign-owned) and increment Skipped", func() {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "prune-foreign-cm",
+					Namespace: "default",
+				},
+				Data: map[string]string{"key": "foreign"},
+			}
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+
+			stale := []releasesv1alpha1.InventoryEntry{{
+				Kind:      "ConfigMap",
+				Version:   "v1",
+				Namespace: "default",
+				Name:      "prune-foreign-cm",
+			}}
+
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Deleted).To(Equal(0))
+			Expect(result.Skipped).To(Equal(1))
+
+			By("verifying the foreign ConfigMap still exists")
+			fetched := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default",
+				Name:      "prune-foreign-cm",
+			}, fetched)).To(Succeed())
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, cm)).To(Succeed())
+		})
+	})
+
+	Context("When live resource's release UUID disagrees with ownerUUID", func() {
+		It("should skip the resource and increment Skipped", func() {
+			const otherUUID = "00000000-0000-0000-0000-0000000000bb"
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "prune-cross-mr-cm",
+					Namespace: "default",
+					Labels: map[string]string{
+						core.LabelManagedBy:         core.LabelManagedByControllerValue,
+						core.LabelModuleReleaseUUID: otherUUID,
+					},
+				},
+				Data: map[string]string{"key": "cross"},
+			}
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+
+			stale := []releasesv1alpha1.InventoryEntry{{
+				Kind:      "ConfigMap",
+				Version:   "v1",
+				Namespace: "default",
+				Name:      "prune-cross-mr-cm",
+			}}
+
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Deleted).To(Equal(0))
+			Expect(result.Skipped).To(Equal(1))
+
+			By("verifying the other-MR ConfigMap still exists")
+			fetched := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default",
+				Name:      "prune-cross-mr-cm",
+			}, fetched)).To(Succeed())
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, cm)).To(Succeed())
+		})
+	})
+
+	Context("When live resource's release UUID matches ownerUUID", func() {
+		It("should delete the resource", func() {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "prune-owned-cm",
+					Namespace: "default",
+					Labels:    ownedLabels(),
+				},
+				Data: map[string]string{"key": "owned"},
+			}
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+
+			stale := []releasesv1alpha1.InventoryEntry{{
+				Kind:      "ConfigMap",
+				Version:   "v1",
+				Namespace: "default",
+				Name:      "prune-owned-cm",
+			}}
+
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Deleted).To(Equal(1))
+			Expect(result.Skipped).To(Equal(0))
+
+			By("verifying the owned ConfigMap no longer exists")
+			fetched := &corev1.ConfigMap{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default",
+				Name:      "prune-owned-cm",
+			}, fetched)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not found"))
+		})
+	})
+
+	Context("When live resource has legacy managed-by but no UUID label", func() {
+		It("should delete the resource (legacy fallback tolerated)", func() {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "prune-legacy-cm",
+					Namespace: "default",
+					Labels: map[string]string{
+						core.LabelManagedBy: core.LabelManagedByLegacyValue,
+					},
+				},
+				Data: map[string]string{"key": "legacy"},
+			}
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+
+			stale := []releasesv1alpha1.InventoryEntry{{
+				Kind:      "ConfigMap",
+				Version:   "v1",
+				Namespace: "default",
+				Name:      "prune-legacy-cm",
+			}}
+
+			result, err := apply.Prune(ctx, k8sClient, testOwnerUUID, stale)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Deleted).To(Equal(1))
+			Expect(result.Skipped).To(Equal(0))
 		})
 	})
 })

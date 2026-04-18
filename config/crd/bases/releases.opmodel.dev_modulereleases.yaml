@@ -286,6 +286,13 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              releaseUUID:
+                description: |-
+                  ReleaseUUID is the globally-unique identity of the rendered ModuleRelease,
+                  read from the `module-release.opmodel.dev/uuid` label on rendered resources.
+                  Populated on the first successful render; consumed by the prune ownership
+                  guard (including the deletion path where a fresh render is not available).
+                type: string
             type: object
         required:
         - spec
