@@ -62,4 +62,4 @@
 - [x] 9.3 Run `task dev:lint` — must pass; new helper names should not trip `revive` / `unused`.
 - [x] 9.4 Run `task dev:test` — full unit + integration suite must pass.
 - [x] 9.5 Run `openspec validate fix-reconcile-correctness-trio --strict` — must pass.
-- [ ] 9.6 Optional sanity (time-permitting): `task kind:setup && task dev:e2e` to confirm no regression in the deployed-controller path.
+- [x] 9.6 Optional sanity (time-permitting): `task kind:setup && task dev:e2e` to confirm no regression in the deployed-controller path.
