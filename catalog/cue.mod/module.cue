@@ -16,8 +16,14 @@ deps: {
 	"opmodel.dev/cert_manager/v1alpha1@v1": {
 		v: "v1.3.2"
 	}
+	"opmodel.dev/ch_vmm/v1alpha1@v1": {
+		v: "v1.0.1"
+	}
+	"opmodel.dev/clickhouse_operator/v1alpha1@v1": {
+		v: "v1.0.0"
+	}
 	"opmodel.dev/core/v1alpha1@v1": {
-		v: "v1.3.8"
+		v: "v1.3.9"
 	}
 	"opmodel.dev/gateway_api/v1alpha1@v1": {
 		v: "v1.3.5"
@@ -28,7 +34,13 @@ deps: {
 	"opmodel.dev/kubernetes/v1@v1": {
 		v: "v1.0.1"
 	}
+	"opmodel.dev/mongodb_operator/v1alpha1@v1": {
+		v: "v1.0.0"
+	}
 	"opmodel.dev/opm/v1alpha1@v1": {
 		v: "v1.5.6"
+	}
+	"opmodel.dev/otel_collector/v1alpha1@v1": {
+		v: "v1.0.0"
 	}
 }
