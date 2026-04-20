@@ -52,6 +52,7 @@ From the current `serviceaccount-impersonation` spec:
 | Controller lacks `impersonate` RBAC | Reconcile stalls; `Ready=False`. |
 | Cross-namespace SA reference | Rejected; SA must be in same namespace as the release. |
 | SA empty (unset) | Controller uses its own identity. Apply fails because the controller's RBAC does not include workload verbs. |
+| SA missing during deletion cleanup | Release stalls with `Ready=False, reason=DeletionSAMissing`. Finalizer retained. Operator must restore the SA, set `spec.prune=false`, or set annotation `opm.dev/force-delete-orphan=true` to drop the finalizer and orphan the inventory. Controller NEVER falls back to its own client on the deletion path. |
 
 Same-namespace and "no fallback identity" are useful but insufficient. A cluster-admin SA can exist in any namespace, including a tenant namespace if an operator placed one there by mistake or by installer default.
 

@@ -17,12 +17,14 @@ limitations under the License.
 package reconcile_test
 
 import (
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,6 +37,30 @@ import (
 	opmreconcile "github.com/open-platform-model/opm-operator/internal/reconcile"
 	"github.com/open-platform-model/opm-operator/internal/status"
 )
+
+// countBufferedEvents drains the FakeRecorder buffer, counts how many event
+// lines mention the target reason, and re-enqueues everything it read so
+// later assertions see the same history. Non-destructive.
+func countBufferedEvents(rec *events.FakeRecorder, reason string) int {
+	var drained []string
+	for {
+		select {
+		case e := <-rec.Events:
+			drained = append(drained, e)
+		default:
+			count := 0
+			for _, e := range drained {
+				if strings.Contains(e, reason) {
+					count++
+				}
+			}
+			for _, e := range drained {
+				rec.Events <- e
+			}
+			return count
+		}
+	}
+}
 
 func reconcileParamsWithConfig() *opmreconcile.ModuleReleaseParams {
 	return &opmreconcile.ModuleReleaseParams{
@@ -576,6 +602,148 @@ var _ = Describe("ServiceAccount Impersonation", func() {
 
 			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
 				ObjectMeta: metav1.ObjectMeta{Name: mrName, Namespace: namespace},
+			})).To(Succeed())
+		})
+	})
+
+	Context("Deletion cleanup with SA missing", func() {
+		It("should stall with DeletionSAMissing, then orphan-exit when annotation is set", func() {
+			mrName := "del-sa-missing-mr"
+			saName := "ephemeral-applier"
+
+			// Bundle SA + permissions so the initial apply succeeds; then
+			// delete the SA to simulate the bundled-SA race at deletion.
+			sa := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: namespace},
+			}
+			Expect(k8sClient.Create(ctx, sa)).To(Succeed())
+
+			role := &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: "del-sa-missing-role"},
+				Rules: []rbacv1.PolicyRule{{
+					APIGroups: []string{""},
+					Resources: []string{"configmaps"},
+					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				}},
+			}
+			Expect(k8sClient.Create(ctx, role)).To(Succeed())
+
+			binding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "del-sa-missing-binding"},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     "del-sa-missing-role",
+				},
+				Subjects: []rbacv1.Subject{{
+					Kind:      "ServiceAccount",
+					Name:      saName,
+					Namespace: namespace,
+				}},
+			}
+			Expect(k8sClient.Create(ctx, binding)).To(Succeed())
+
+			mr := &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: mrName, Namespace: namespace},
+				Spec: releasesv1alpha1.ModuleReleaseSpec{
+					Module: releasesv1alpha1.ModuleReference{
+						Path:    "opmodel.dev/test/module",
+						Version: "v0.1.0",
+					},
+					Prune:              true,
+					ServiceAccountName: saName,
+					Values:             &releasesv1alpha1.RawValues{},
+				},
+			}
+			mr.Spec.Values.Raw = []byte(`{"message": "bundled-sa"}`)
+			Expect(k8sClient.Create(ctx, mr)).To(Succeed())
+
+			params := reconcileParamsWithConfig()
+			nn := types.NamespacedName{Name: mrName, Namespace: namespace}
+			ensureFinalizer(params, nn)
+
+			// Apply the release so it has a populated inventory to prune.
+			_, err := opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			var applied releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &applied)).To(Succeed())
+			Expect(applied.Status.Inventory).NotTo(BeNil())
+			Expect(applied.Status.Inventory.Count).To(BeNumerically(">", 0))
+
+			// Delete SA + RBAC to simulate the bundled-SA race at cleanup.
+			Expect(k8sClient.Delete(ctx, &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: namespace},
+			})).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "del-sa-missing-binding"},
+			})).To(Succeed())
+
+			// Request deletion of the MR — apiserver sets DeletionTimestamp
+			// but retains the object while the finalizer is present.
+			Expect(k8sClient.Delete(ctx, &releasesv1alpha1.ModuleRelease{
+				ObjectMeta: metav1.ObjectMeta{Name: mrName, Namespace: namespace},
+			})).To(Succeed())
+
+			// First reconcile post-delete: must stall with DeletionSAMissing.
+			result, err := opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Minute))
+
+			var stalledMR releasesv1alpha1.ModuleRelease
+			Expect(k8sClient.Get(ctx, nn, &stalledMR)).To(Succeed())
+			ready := apimeta.FindStatusCondition(stalledMR.Status.Conditions, status.ReadyCondition)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			Expect(ready.Reason).To(Equal(status.DeletionSAMissingReason))
+			Expect(ready.Message).To(ContainSubstring(saName))
+			Expect(stalledMR.Finalizers).To(ContainElement(opmreconcile.FinalizerName),
+				"finalizer must be retained while stalled")
+			Expect(stalledMR.Status.Inventory).NotTo(BeNil(),
+				"inventory must be preserved so recovery can prune")
+
+			// Second reconcile without any change: event must NOT re-fire
+			// (dedup via Ready-transition check).
+			// Count only the events drained so far — we compare before/after below.
+			fakeRec, ok := params.EventRecorder.(*events.FakeRecorder)
+			Expect(ok).To(BeTrue())
+			priorDeletionEvents := countBufferedEvents(fakeRec, status.DeletionSAMissingReason)
+			_, err = opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			postDeletionEvents := countBufferedEvents(fakeRec, status.DeletionSAMissingReason)
+			Expect(postDeletionEvents).To(Equal(priorDeletionEvents),
+				"no new DeletionSAMissing events on same-reason requeue")
+
+			// Patch orphan annotation. Use the current stalledMR to keep
+			// resourceVersion fresh for the patch.
+			Expect(k8sClient.Get(ctx, nn, &stalledMR)).To(Succeed())
+			if stalledMR.Annotations == nil {
+				stalledMR.Annotations = map[string]string{}
+			}
+			stalledMR.Annotations[releasesv1alpha1.AnnotationForceDeleteOrphan] = "true"
+			Expect(k8sClient.Update(ctx, &stalledMR)).To(Succeed())
+
+			// Next reconcile: orphan-exit removes finalizer and emits event.
+			_, err = opmreconcile.ReconcileModuleRelease(ctx, params, ctrl.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// MR should now be gone (apiserver GCs after last finalizer drops).
+			Eventually(func(g Gomega) {
+				var check releasesv1alpha1.ModuleRelease
+				err := k8sClient.Get(ctx, nn, &check)
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			Expect(countBufferedEvents(fakeRec, status.OrphanedOnDeletionReason)).To(Equal(1),
+				"OrphanedOnDeletion event must be emitted exactly once")
+
+			// The underlying ConfigMap was not pruned (SA missing → orphan).
+			// Clean it up so the namespace stays tidy for subsequent specs.
+			_ = k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-module", Namespace: namespace},
+			})
+			Expect(k8sClient.Delete(ctx, &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: "del-sa-missing-role"},
 			})).To(Succeed())
 		})
 	})

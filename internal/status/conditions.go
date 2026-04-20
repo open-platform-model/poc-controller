@@ -23,6 +23,8 @@ const (
 	ApplyFailedReason             = "ApplyFailed"
 	PruneFailedReason             = "PruneFailed"
 	ImpersonationFailedReason     = "ImpersonationFailed"
+	DeletionSAMissingReason       = "DeletionSAMissing"
+	OrphanedOnDeletionReason      = "OrphanedOnDeletion"
 	ReconciliationSucceededReason = "ReconciliationSucceeded"
 	DriftDetectedReason           = "DriftDetected"
 

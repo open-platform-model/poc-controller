@@ -22,6 +22,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// AnnotationForceDeleteOrphan is the release annotation that, when set to
+// "true", releases a finalizer stuck in the DeletionSAMissing stall by
+// skipping prune and orphaning the managed inventory. Any value other than
+// the literal string "true" is treated as absent.
+const AnnotationForceDeleteOrphan = "opm.dev/force-delete-orphan"
+
 // SourceReference points to a Flux source object.
 // Used by BundleRelease; ModuleRelease uses CUE-native module resolution instead.
 type SourceReference = fluxmeta.NamespacedObjectKindReference

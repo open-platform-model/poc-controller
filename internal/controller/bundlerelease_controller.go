@@ -46,6 +46,12 @@ type BundleReleaseReconciler struct {
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
+// Note: BundleRelease does not impersonate a ServiceAccount on deletion; it
+// orchestrates child ModuleReleases only. The DeletionSAMissing stall
+// (handleDeletionImpersonationFailure in internal/reconcile/modulerelease.go)
+// therefore does not apply here. If bundle reconcile ever grows a direct
+// apply or prune path, apply the same SA-missing guardrail.
+//
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
 func (r *BundleReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

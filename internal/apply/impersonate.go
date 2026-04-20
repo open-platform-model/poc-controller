@@ -12,6 +12,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// IsServiceAccountNotFound reports whether err was produced by
+// NewImpersonatedClient because the target ServiceAccount did not exist.
+// The wrapping chain preserves the apiserver's NotFound status so callers
+// can branch deletion-cleanup behavior without introducing a sentinel type.
+func IsServiceAccountNotFound(err error) bool {
+	return apierrors.IsNotFound(err)
+}
+
 // NewImpersonatedClient builds a controller-runtime client that impersonates
 // the given ServiceAccount for all API calls. The SA must exist in the
 // specified namespace; if it does not, an error is returned so the caller

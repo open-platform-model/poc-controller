@@ -119,7 +119,39 @@ A bootstrap tool (Argo, Flux, Terraform, `kustomize`) that creates tenant namesp
 
 ### Deletion cleanup
 
-Finalizer-driven deletion cleanup follows the same `spec.serviceAccountName > --default-service-account > controller client` resolution as apply and prune — a release with empty spec + a manager flag prunes inventory under the flag-defaulted identity. Deletion is best-effort: if the resolved SA cannot be impersonated (for example, the SA was deleted before the release), the controller logs the failure and falls back to its own client so the finalizer eventually clears. Deletion will never stall indefinitely on an impersonation problem; operators relying on the flag for tenancy isolation should audit finalizer-fallback events when tenant namespaces are torn down out-of-order.
+Finalizer-driven deletion cleanup follows the same `spec.serviceAccountName > --default-service-account > controller client` resolution as apply and prune — a release with empty spec + a manager flag prunes inventory under the flag-defaulted identity.
+
+If the resolved SA is missing at deletion time (for example, the SA was deleted before the release — classic `kubectl delete -f` race against a bundled SA), the controller does **not** fall back to its own client. Instead the release stalls:
+
+| Condition | Status | Reason |
+|-----------|--------|--------|
+| `Ready` | `False` | `DeletionSAMissing` |
+| `Stalled` | `True` | `DeletionSAMissing` |
+
+The finalizer is retained, a `Warning` event (`DeletionSAMissing`) is emitted once on the transition, and the reconcile requeues on the stalled-recheck interval.
+
+### Recovering a release stuck on `DeletionSAMissing`
+
+Three operator actions, in order of preference:
+
+1. **Restore the ServiceAccount and its RBAC.** The next reconcile impersonates successfully, prunes the inventory, and removes the finalizer.
+2. **Patch `spec.prune=false`.** The controller orphans managed resources without attempting impersonation and removes the finalizer.
+3. **Set annotation `opm.dev/force-delete-orphan=true`.** Break-glass only. The controller:
+   - Skips prune entirely.
+   - Clears `status.inventory` in the final status patch.
+   - Emits a `Warning` event (`OrphanedOnDeletion`) naming the orphaned entry count so the leak is auditable.
+   - Removes the finalizer.
+
+   The managed resources remain in the cluster; cleaning them up is the operator's responsibility.
+
+   Any annotation value other than the literal string `"true"` is treated as absent. This prevents typos from releasing the finalizer.
+
+```bash
+kubectl annotate modulerelease <name> \
+  opm.dev/force-delete-orphan=true
+```
+
+Other impersonation errors on the deletion path (transient API errors, controller lacks `impersonate`, target RBAC denies `impersonate`) keep the existing `ImpersonationFailed` stall. The orphan annotation has no effect on those cases — it is narrowly scoped to SA-NotFound.
 
 ## Security note
 

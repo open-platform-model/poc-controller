@@ -94,7 +94,7 @@ func ReconcileRelease(
 	}
 
 	if !rel.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, handleReleaseDeletion(ctx, params, &rel)
+		return handleReleaseDeletion(ctx, params, &rel)
 	}
 
 	patcher := patch.NewSerialPatcher(&rel, params.Client)
@@ -613,43 +613,142 @@ func removeReleaseFinalizer(ctx context.Context, c client.Client, rel *releasesv
 	return c.Patch(ctx, rel, mergePatch)
 }
 
-func handleReleaseDeletion(ctx context.Context, params *ReleaseParams, rel *releasesv1alpha1.Release) error {
+// handleReleaseDeletion runs the deletion cleanup path. Mirrors
+// handleDeletion in modulerelease.go — both share the same SA-missing-at-delete
+// bug class and are kept symmetric on purpose. See that function's doc and
+// design.md (deletion-sa-missing-stall) for the stall/orphan branches.
+func handleReleaseDeletion(ctx context.Context, params *ReleaseParams, rel *releasesv1alpha1.Release) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Running deletion cleanup for Release")
 
-	if rel.Spec.Prune && rel.Status.Inventory != nil && len(rel.Status.Inventory.Entries) > 0 {
-		deleteClient := params.Client
-		effectiveSA, source := resolveEffectiveSA(rel.Spec.ServiceAccountName, params.DefaultServiceAccount)
-		if effectiveSA != "" && params.RestConfig != nil {
-			impClient, impErr := apply.NewImpersonatedClient(ctx, params.RestConfig, params.APIReader, params.Client.Scheme(), rel.Namespace, effectiveSA)
-			if impErr != nil {
-				// Best-effort: deletion must not be blocked indefinitely by
-				// a missing or unauthorized SA. Fall back to the controller
-				// client so the finalizer can eventually clear.
-				log.Info("ServiceAccount unavailable for deletion cleanup, using controller client",
-					"serviceAccount", effectiveSA,
-					"serviceAccountSource", source,
-					"error", impErr)
-			} else {
-				deleteClient = impClient
-			}
+	patcher := patch.NewSerialPatcher(rel, params.Client)
+
+	if !rel.Spec.Prune || rel.Status.Inventory == nil || len(rel.Status.Inventory.Entries) == 0 {
+		if !rel.Spec.Prune {
+			log.Info("Prune disabled, orphaning managed resources on deletion")
 		}
-		pruneResult, err := apply.Prune(ctx, deleteClient, "", rel.Status.Inventory.Entries)
-		if err != nil {
-			log.Error(err, "Partial failure during deletion cleanup, retaining finalizer")
-			return err
+		if err := removeReleaseFinalizer(ctx, params.Client, rel); err != nil {
+			return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
 		}
-		log.Info("Deletion cleanup pruned resources",
-			"deleted", pruneResult.Deleted, "skipped", pruneResult.Skipped)
-	} else if !rel.Spec.Prune {
-		log.Info("Prune disabled, orphaning managed resources on deletion")
+		log.Info("Finalizer removed, deletion can proceed")
+		return ctrl.Result{}, nil
 	}
 
+	effectiveSA, source := resolveEffectiveSA(rel.Spec.ServiceAccountName, params.DefaultServiceAccount)
+	deleteClient := params.Client
+	if effectiveSA != "" && params.RestConfig != nil {
+		impClient, impErr := apply.NewImpersonatedClient(ctx, params.RestConfig, params.APIReader, params.Client.Scheme(), rel.Namespace, effectiveSA)
+		if impErr != nil {
+			return handleReleaseDeletionImpersonationFailure(ctx, params, patcher, rel, effectiveSA, source, impErr)
+		}
+		deleteClient = impClient
+	}
+
+	pruneResult, err := apply.Prune(ctx, deleteClient, "", rel.Status.Inventory.Entries)
+	if err != nil {
+		if effectiveSA != "" && isForbidden(err) {
+			log.Error(err, "Impersonation denied during deletion cleanup",
+				"serviceAccount", effectiveSA,
+				"serviceAccountSource", source)
+			emit := !readyAlreadyStalledWith(rel.Status.Conditions, status.ImpersonationFailedReason)
+			status.MarkStalled(rel, status.ImpersonationFailedReason, "%s", err)
+			if emit {
+				params.EventRecorder.Eventf(rel, nil, corev1.EventTypeWarning,
+					status.ImpersonationFailedReason, "Delete", "%s", err)
+			}
+			if patchErr := patchReleaseDeletionStatus(ctx, patcher, rel); patchErr != nil {
+				log.Error(patchErr, "Failed to patch Release status on Forbidden deletion prune")
+			}
+			return ctrl.Result{RequeueAfter: StalledRecheckInterval}, nil
+		}
+		log.Error(err, "Partial failure during deletion cleanup, retaining finalizer")
+		return ctrl.Result{}, err
+	}
+	log.Info("Deletion cleanup pruned resources",
+		"deleted", pruneResult.Deleted, "skipped", pruneResult.Skipped)
+
 	if err := removeReleaseFinalizer(ctx, params.Client, rel); err != nil {
-		return fmt.Errorf("removing finalizer: %w", err)
+		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 	log.Info("Finalizer removed, deletion can proceed")
-	return nil
+	return ctrl.Result{}, nil
+}
+
+func handleReleaseDeletionImpersonationFailure(
+	ctx context.Context,
+	params *ReleaseParams,
+	patcher *patch.SerialPatcher,
+	rel *releasesv1alpha1.Release,
+	effectiveSA, source string,
+	impErr error,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if apply.IsServiceAccountNotFound(impErr) {
+		if rel.GetAnnotations()[releasesv1alpha1.AnnotationForceDeleteOrphan] == "true" {
+			orphanCount := int64(len(rel.Status.Inventory.Entries))
+			log.Info("Orphaning inventory and removing finalizer at operator request",
+				"serviceAccount", effectiveSA,
+				"serviceAccountSource", source,
+				"inventoryCount", orphanCount)
+			params.EventRecorder.Eventf(rel, nil, corev1.EventTypeWarning,
+				status.OrphanedOnDeletionReason, "Delete",
+				"Orphaned %d managed resources; ServiceAccount %q missing and %s annotation set",
+				orphanCount, effectiveSA, releasesv1alpha1.AnnotationForceDeleteOrphan)
+			rel.Status.Inventory = nil
+			if err := patchReleaseDeletionStatus(ctx, patcher, rel); err != nil {
+				log.Error(err, "Failed to patch Release status on orphan-exit")
+			}
+			if err := removeReleaseFinalizer(ctx, params.Client, rel); err != nil {
+				return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
+			}
+			log.Info("Finalizer removed, deletion can proceed")
+			return ctrl.Result{}, nil
+		}
+
+		log.Error(impErr, "Impersonation ServiceAccount missing during deletion; release stalled pending operator action",
+			"serviceAccount", effectiveSA,
+			"serviceAccountSource", source,
+			"annotation", releasesv1alpha1.AnnotationForceDeleteOrphan)
+		msg := deletionSAMissingMessage(rel.Namespace, effectiveSA)
+		emit := !readyAlreadyStalledWith(rel.Status.Conditions, status.DeletionSAMissingReason)
+		status.MarkStalled(rel, status.DeletionSAMissingReason, "%s", msg)
+		if emit {
+			params.EventRecorder.Eventf(rel, nil, corev1.EventTypeWarning,
+				status.DeletionSAMissingReason, "Delete", "%s", msg)
+		}
+		if err := patchReleaseDeletionStatus(ctx, patcher, rel); err != nil {
+			log.Error(err, "Failed to patch Release status on DeletionSAMissing stall")
+		}
+		return ctrl.Result{RequeueAfter: StalledRecheckInterval}, nil
+	}
+
+	log.Error(impErr, "Impersonation failed during deletion cleanup",
+		"serviceAccount", effectiveSA,
+		"serviceAccountSource", source)
+	emit := !readyAlreadyStalledWith(rel.Status.Conditions, status.ImpersonationFailedReason)
+	status.MarkStalled(rel, status.ImpersonationFailedReason, "%s", impErr)
+	if emit {
+		params.EventRecorder.Eventf(rel, nil, corev1.EventTypeWarning,
+			status.ImpersonationFailedReason, "Delete", "%s", impErr)
+	}
+	if err := patchReleaseDeletionStatus(ctx, patcher, rel); err != nil {
+		log.Error(err, "Failed to patch Release status on ImpersonationFailed stall")
+	}
+	return ctrl.Result{RequeueAfter: StalledRecheckInterval}, nil
+}
+
+func patchReleaseDeletionStatus(ctx context.Context, patcher *patch.SerialPatcher, rel *releasesv1alpha1.Release) error {
+	return patcher.Patch(ctx, rel,
+		patch.WithOwnedConditions{
+			Conditions: []string{
+				status.ReadyCondition,
+				status.ReconcilingCondition,
+				status.StalledCondition,
+				status.DriftedCondition,
+			},
+		},
+	)
 }
 
 // buildReleaseApplyClient returns the ResourceManager and client to use for
