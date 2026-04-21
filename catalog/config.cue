@@ -10,6 +10,7 @@ import (
 	chop_provs "opmodel.dev/clickhouse_operator/v1alpha1/providers/kubernetes@v1"
 	otel_provs "opmodel.dev/otel_collector/v1alpha1/providers/kubernetes@v1"
 	chvmm "opmodel.dev/ch_vmm/v1alpha1/providers/kubernetes@v1"
+	istio_provs "opmodel.dev/istio/v1alpha1/providers/kubernetes@v1"
 )
 
 providers: {
@@ -22,5 +23,6 @@ providers: {
 		#transformers: chop_provs.#Provider.#transformers
 		#transformers: otel_provs.#Provider.#transformers
 		#transformers: chvmm.#Provider.#transformers
+		#transformers: istio_provs.#Provider.#transformers
 	}
 }

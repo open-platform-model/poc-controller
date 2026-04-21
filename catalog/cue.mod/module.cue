@@ -28,6 +28,9 @@ deps: {
 	"opmodel.dev/gateway_api/v1alpha1@v1": {
 		v: "v1.3.5"
 	}
+	"opmodel.dev/istio/v1alpha1@v1": {
+		v: "v1.0.1"
+	}
 	"opmodel.dev/k8up/v1alpha1@v1": {
 		v: "v1.0.2"
 	}
